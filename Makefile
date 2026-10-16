@@ -22,7 +22,7 @@ LDFLAGS := -m elf_i386 -T linker.ld -nostdlib
 
 .PHONY: all kernel iso run test clean check-tools
 
-all: iso
+all: check-tools iso
 
 kernel: $(KERNEL)
 
@@ -52,6 +52,7 @@ check-tools:
 	@command -v $(LD) >/dev/null || { echo "Missing linker: $(LD)"; exit 1; }
 	@command -v $(GRUB_FILE) >/dev/null || { echo "Missing grub-file (install grub-pc-bin)"; exit 1; }
 	@command -v $(GRUB_MKRESCUE) >/dev/null || { echo "Missing grub-mkrescue (install grub-pc-bin and xorriso)"; exit 1; }
+	@command -v mformat >/dev/null || { echo "Missing mformat (install mtools)"; exit 1; }
 
 run: $(ISO)
 	$(QEMU) -m 128M -cdrom $(ISO) -monitor none -serial stdio -no-reboot -no-shutdown
