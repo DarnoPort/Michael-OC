@@ -401,8 +401,12 @@ static int initialize_graphics(u32 multiboot_info_address)
     serial_write("FB_HEIGHT="); serial_write_hex(info->framebuffer_height); serial_write("\r\n");
     serial_write("FB_BPP="); serial_write_hex((u32)info->framebuffer_bpp); serial_write("\r\n");
     serial_write("FB_TYPE="); serial_write_hex((u32)info->framebuffer_type); serial_write("\r\n");
-    serial_write("FB_RGB_POS="); serial_write_hex((u32)info->color.red_field_position); serial_write("\r\n");
-    serial_write("FB_RGB_SIZE="); serial_write_hex((u32)info->color.red_mask_size); serial_write("\r\n");
+    serial_write("FB_RED_POS="); serial_write_hex((u32)info->color.red_field_position); serial_write("\r\n");
+    serial_write("FB_RED_SIZE="); serial_write_hex((u32)info->color.red_mask_size); serial_write("\r\n");
+    serial_write("FB_GREEN_POS="); serial_write_hex((u32)info->color.green_field_position); serial_write("\r\n");
+    serial_write("FB_GREEN_SIZE="); serial_write_hex((u32)info->color.green_mask_size); serial_write("\r\n");
+    serial_write("FB_BLUE_POS="); serial_write_hex((u32)info->color.blue_field_position); serial_write("\r\n");
+    serial_write("FB_BLUE_SIZE="); serial_write_hex((u32)info->color.blue_mask_size); serial_write("\r\n");
 
     if ((info->flags & MULTIBOOT_INFO_FRAMEBUFFER) == 0u) {
         serial_write("FB_DIAG_FLAGS_MISSING\r\n");

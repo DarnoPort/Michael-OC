@@ -15,11 +15,11 @@
 .long 0
 .long 0
 
-/* Prefer linear graphics, but accept whatever resolution/depth is available. */
+/* Request a common linear 800x600x32 mode. */
 .long 0
-.long 0
-.long 0
-.long 0
+.long 800
+.long 600
+.long 32
 
 .section .bss
 .align 16
