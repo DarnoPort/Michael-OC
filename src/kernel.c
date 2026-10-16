@@ -8,6 +8,7 @@
 
 #include "multiboot.h"
 #include "memory.h"
+#include "interrupts.h"
 
 #define VGA_WIDTH  80u
 #define VGA_HEIGHT 25u
@@ -408,7 +409,7 @@ static void draw_system_screen(void)
 
     mono_draw_text(80u, 322u, "CANVAS: 1 BIT / PIXEL", 2u, 0);
     mono_draw_text(80u, 370u, "DISPLAY: BLACK / WHITE", 2u, 0);
-    mono_draw_text(80u, 418u, "INPUT: PS/2 POLLING", 2u, 0);
+    mono_draw_text(80u, 418u, "INPUT: PS/2 IRQ", 2u, 0);
     mono_draw_text(80u, 454u, pmm_is_initialized() ? "PMM: READY" : "PMM: NOT READY", 2u, 0);
     mono_draw_text(80u, 490u, "FREE PAGES:", 1u, 0);
     mono_draw_uint(170u, 490u, pmm_free_page_count(), 1u);
@@ -681,19 +682,6 @@ static int initialize_graphics(u32 multiboot_info_address)
     return 1;
 }
 
-static int keyboard_try_read_scancode(u8 *scancode)
-{
-    const u8 status = inb(0x64u);
-
-    /* Output-buffer-full must be set; ignore auxiliary (mouse) bytes. */
-    if ((status & 0x01u) == 0u || (status & 0x20u) != 0u) {
-        return 0;
-    }
-
-    *scancode = inb(0x60u);
-    return 1;
-}
-
 static void log_ui_screen_event(void)
 {
     switch (active_screen) {
@@ -713,13 +701,16 @@ static void log_ui_screen_event(void)
     }
 }
 
-static void keyboard_poll_loop(void)
+static void keyboard_irq_loop(void)
 {
-    serial_write("MICHAEL_OC_KEYBOARD_POLL_OK\r\n");
+    if (!interrupts_enable_keyboard_irq()) {
+        serial_write("MICHAEL_OC_KEYBOARD_IRQ_FATAL\r\n");
+        halt_forever();
+    }
 
     for (;;) {
         u8 scancode;
-        if (keyboard_try_read_scancode(&scancode)) {
+        if (interrupts_read_keyboard_scancode(&scancode)) {
             const enum ui_screen previous_screen = active_screen;
             if (handle_ui_scancode(scancode)) {
                 if (active_screen != previous_screen) {
@@ -733,7 +724,8 @@ static void keyboard_poll_loop(void)
                 mono_flush_framebuffer();
             }
         } else {
-            __asm__ volatile ("pause");
+            /* STI blocks IRQ delivery until the following HLT instruction. */
+            __asm__ volatile ("sti; hlt" : : : "memory");
         }
     }
 }
@@ -779,5 +771,5 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
         halt_forever();
     }
 
-    keyboard_poll_loop();
+    keyboard_irq_loop();
 }

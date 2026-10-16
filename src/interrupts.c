@@ -7,8 +7,21 @@
 #include "multiboot.h"
 
 #define COM1 0x3F8u
-#define IDT_ENTRIES 32u
+#define EXCEPTION_COUNT 32u
+#define IRQ_BASE 32u
+#define IRQ_COUNT 16u
+#define IDT_ENTRIES (EXCEPTION_COUNT + IRQ_COUNT)
 #define IDT_INTERRUPT_GATE 0x8Eu
+#define PIC_MASTER_COMMAND 0x20u
+#define PIC_MASTER_DATA 0x21u
+#define PIC_SLAVE_COMMAND 0xA0u
+#define PIC_SLAVE_DATA 0xA1u
+#define PIC_EOI 0x20u
+#define PS2_DATA 0x60u
+#define PS2_STATUS_COMMAND 0x64u
+#define KEYBOARD_IRQ 1u
+#define SCANCODE_QUEUE_SIZE 128u
+#define SCANCODE_QUEUE_MASK (SCANCODE_QUEUE_SIZE - 1u)
 
 typedef struct __attribute__((packed)) {
     u16 offset_low;
@@ -41,6 +54,9 @@ typedef struct {
 
 static idt_gate_t idt[IDT_ENTRIES];
 static idtr_t idtr;
+static volatile u8 scancode_queue[SCANCODE_QUEUE_SIZE];
+static volatile u8 scancode_head;
+static volatile u8 scancode_tail;
 
 extern u32 isr_stub_table[IDT_ENTRIES];
 
@@ -54,6 +70,95 @@ static inline u8 inb(u16 port)
     u8 value;
     __asm__ volatile ("inb %1, %0" : "=a"(value) : "Nd"(port));
     return value;
+}
+
+static inline void io_wait(void)
+{
+    outb(0x80u, 0u);
+}
+
+static void pic_remap_and_mask(void)
+{
+    outb(PIC_MASTER_COMMAND, 0x11u);
+    io_wait();
+    outb(PIC_SLAVE_COMMAND, 0x11u);
+    io_wait();
+    outb(PIC_MASTER_DATA, (u8)IRQ_BASE);
+    io_wait();
+    outb(PIC_SLAVE_DATA, (u8)(IRQ_BASE + 8u));
+    io_wait();
+    outb(PIC_MASTER_DATA, 0x04u);
+    io_wait();
+    outb(PIC_SLAVE_DATA, 0x02u);
+    io_wait();
+    outb(PIC_MASTER_DATA, 0x01u);
+    io_wait();
+    outb(PIC_SLAVE_DATA, 0x01u);
+    io_wait();
+    outb(PIC_MASTER_DATA, 0xFFu);
+    outb(PIC_SLAVE_DATA, 0xFFu);
+}
+
+static int ps2_wait_input_empty(void)
+{
+    for (u32 i = 0u; i < 100000u; ++i) {
+        if ((inb(PS2_STATUS_COMMAND) & 0x02u) == 0u) return 1;
+    }
+    return 0;
+}
+
+static int ps2_wait_output_full(void)
+{
+    for (u32 i = 0u; i < 100000u; ++i) {
+        if ((inb(PS2_STATUS_COMMAND) & 0x01u) != 0u) return 1;
+    }
+    return 0;
+}
+
+static int ps2_enable_keyboard_irq(void)
+{
+    if (!ps2_wait_input_empty()) return 0;
+    outb(PS2_STATUS_COMMAND, 0x20u);
+    if (!ps2_wait_output_full()) return 0;
+
+    u8 command_byte = inb(PS2_DATA);
+    command_byte = (u8)((command_byte | 0x01u) & (u8)~0x10u);
+
+    if (!ps2_wait_input_empty()) return 0;
+    outb(PS2_STATUS_COMMAND, 0x60u);
+    if (!ps2_wait_input_empty()) return 0;
+    outb(PS2_DATA, command_byte);
+    if (!ps2_wait_input_empty()) return 0;
+
+    while ((inb(PS2_STATUS_COMMAND) & 0x01u) != 0u) {
+        (void)inb(PS2_DATA);
+    }
+    return 1;
+}
+
+static void enqueue_scancode(u8 scancode)
+{
+    const u8 head = scancode_head;
+    const u8 next = (u8)((head + 1u) & SCANCODE_QUEUE_MASK);
+    if (next == scancode_tail) return;
+    scancode_queue[head] = scancode;
+    scancode_head = next;
+}
+
+int interrupts_read_keyboard_scancode(u8 *scancode)
+{
+    if (scancode == 0) return 0;
+    const u8 tail = scancode_tail;
+    if (tail == scancode_head) return 0;
+    *scancode = scancode_queue[tail];
+    scancode_tail = (u8)((tail + 1u) & SCANCODE_QUEUE_MASK);
+    return 1;
+}
+
+static void send_pic_eoi(u32 irq)
+{
+    if (irq >= 8u) outb(PIC_SLAVE_COMMAND, PIC_EOI);
+    outb(PIC_MASTER_COMMAND, PIC_EOI);
 }
 
 static void serial_init(void)
@@ -103,6 +208,21 @@ static __attribute__((noreturn)) void stop_with_init_error(const char *message)
     }
 }
 
+int interrupts_enable_keyboard_irq(void)
+{
+    if (!ps2_enable_keyboard_irq()) {
+        serial_write("MICHAEL_OC_KEYBOARD_IRQ_FAILED: PS/2 controller timeout\r\n");
+        return 0;
+    }
+
+    /* Unmask only IRQ1; every other device stays masked until it has a driver. */
+    outb(PIC_MASTER_DATA, 0xFDu);
+    outb(PIC_SLAVE_DATA, 0xFFu);
+    __asm__ volatile ("sti" : : : "memory");
+    serial_write("MICHAEL_OC_KEYBOARD_IRQ_OK\r\n");
+    return 1;
+}
+
 void interrupts_init(void)
 {
     serial_init();
@@ -140,7 +260,12 @@ void interrupts_init(void)
         stop_with_init_error("MICHAEL_OC_IDT_FAILED: SIDT mismatch");
     }
 
+    pic_remap_and_mask();
+    scancode_head = 0u;
+    scancode_tail = 0u;
+
     serial_write("MICHAEL_OC_IDT_OK\r\n");
+    serial_write("MICHAEL_OC_PIC_REMAP_OK\r\n");
 
 #ifdef MICHAEL_OC_EXCEPTION_TEST
     /* This build is only used by make test-exception, never by the normal ISO. */
@@ -152,7 +277,7 @@ void interrupts_init(void)
 
 static const char *exception_name(u32 vector)
 {
-    static const char *const names[IDT_ENTRIES] = {
+    static const char *const names[EXCEPTION_COUNT] = {
         "divide error", "debug", "non-maskable interrupt", "breakpoint",
         "overflow", "bound range", "invalid opcode", "device not available",
         "double fault", "coprocessor segment overrun", "invalid TSS",
@@ -166,13 +291,26 @@ static const char *exception_name(u32 vector)
         "VMM communication", "security exception", "reserved exception 31"
     };
 
-    return vector < IDT_ENTRIES ? names[vector] : "unknown exception";
+    return vector < EXCEPTION_COUNT ? names[vector] : "unknown exception";
 }
 
 void interrupt_dispatch(const interrupt_frame_t *frame)
 {
     if (frame == 0) {
         stop_with_init_error("MICHAEL_OC_EXCEPTION: missing register frame");
+    }
+
+    if (frame->vector >= IRQ_BASE && frame->vector < IRQ_BASE + IRQ_COUNT) {
+        const u32 irq = frame->vector - IRQ_BASE;
+        if (irq == KEYBOARD_IRQ) {
+            const u8 status = inb(PS2_STATUS_COMMAND);
+            if ((status & 0x01u) != 0u) {
+                const u8 value = inb(PS2_DATA);
+                if ((status & 0x20u) == 0u) enqueue_scancode(value);
+            }
+        }
+        send_pic_eoi(irq);
+        return;
     }
 
     serial_write("MICHAEL_OC_FATAL_EXCEPTION vector=");
