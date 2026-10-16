@@ -63,8 +63,10 @@ test: $(ISO)
 	@rm -f $(BUILD_DIR)/serial.log
 	@set +e; $(TIMEOUT) 5s $(QEMU) -m 128M -cdrom $(ISO) -display none -monitor none -serial file:$(BUILD_DIR)/serial.log -no-reboot -no-shutdown; rc=$$?; set -e; \
 	if [ "$$rc" -ne 0 ] && [ "$$rc" -ne 124 ]; then echo "FAIL: QEMU exited with status $$rc"; cat $(BUILD_DIR)/serial.log 2>/dev/null || true; exit "$$rc"; fi; \
-	if ! grep -q "MICHAEL_OC_BOOT_OK" $(BUILD_DIR)/serial.log; then echo "FAIL: kernel boot marker not found"; cat $(BUILD_DIR)/serial.log 2>/dev/null || true; exit 1; fi; \
-	echo "PASS: QEMU reached the Michael OC kernel entry point."
+	for marker in MICHAEL_OC_BOOT_OK MICHAEL_OC_MONO_TEST_OK MICHAEL_OC_FB_OK; do \
+		if ! grep -q "$$marker" $(BUILD_DIR)/serial.log; then echo "FAIL: missing $$marker"; cat $(BUILD_DIR)/serial.log 2>/dev/null || true; exit 1; fi; \
+	done; \
+	echo "PASS: QEMU booted the kernel, tested the packed 1-bit canvas, and flushed a monochrome framebuffer."
 
 clean:
 	rm -rf $(BUILD_DIR)
