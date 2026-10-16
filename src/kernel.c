@@ -713,7 +713,7 @@ static void keyboard_irq_loop(void)
     int tick_marker_emitted = 0;
     for (;;) {
         if (!tick_marker_emitted && interrupts_timer_ticks() >= 3u) {
-            serial_write("MICHAEL_OC_PIT_TICK_OK\\r\\n");
+            serial_write("MICHAEL_OC_PIT_TICK_OK\r\n");
             tick_marker_emitted = 1;
         }
         u8 scancode;

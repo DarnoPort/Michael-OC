@@ -224,14 +224,14 @@ int interrupts_enable_timer_keyboard_irqs(void)
     outb(PIT_COMMAND, 0x36u);
     outb(PIT_CHANNEL0_DATA, (u8)(divisor & 0xFFu));
     outb(PIT_CHANNEL0_DATA, (u8)(divisor >> 8));
-    serial_write("MICHAEL_OC_PIT_OK\\r\\n");
+    serial_write("MICHAEL_OC_PIT_OK\r\n");
 
     /* Only the timer and keyboard IRQs are enabled; all others stay masked. */
     outb(PIC_MASTER_DATA, 0xFCu);
     outb(PIC_SLAVE_DATA, 0xFFu);
     __asm__ volatile ("sti" : : : "memory");
-    serial_write("MICHAEL_OC_HARDWARE_IRQ_OK\\r\\n");
-    serial_write("MICHAEL_OC_KEYBOARD_IRQ_OK\\r\\n");
+    serial_write("MICHAEL_OC_HARDWARE_IRQ_OK\r\n");
+    serial_write("MICHAEL_OC_KEYBOARD_IRQ_OK\r\n");
     return 1;
 }
 
