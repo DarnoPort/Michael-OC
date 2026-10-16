@@ -117,14 +117,7 @@ test: $(ISO)
 test-exception: $(EXCEPTION_TEST_ISO)
 	@command -v $(QEMU) >/dev/null || { echo "Missing $(QEMU); install qemu-system-x86"; exit 1; }
 	@command -v $(TIMEOUT) >/dev/null || { echo "Missing timeout (GNU coreutils)"; exit 1; }
-	@rm -f $(EXCEPTION_TEST_DIR)/serial-exception.log
-	@set +e; $(TIMEOUT) 5s $(QEMU) -m 128M -cdrom $(EXCEPTION_TEST_ISO) -display none -monitor none -serial file:$(EXCEPTION_TEST_DIR)/serial-exception.log -no-reboot -no-shutdown; rc=$?; set -e; \
-	if [ "$rc" -ne 124 ]; then echo "FAIL: exception-test QEMU exited with status $rc (expected timeout after fatal exception)"; cat $(EXCEPTION_TEST_DIR)/serial-exception.log 2>/dev/null || true; exit 1; fi; \
-	for marker in MICHAEL_OC_BOOT_OK MICHAEL_OC_IDT_OK MICHAEL_OC_EXCEPTION_SELF_TEST_TRIGGER "MICHAEL_OC_EXCEPTION_VECTOR=0x00000003 ERROR=0x00000000"; do \
-		if ! grep -q "$marker" $(EXCEPTION_TEST_DIR)/serial-exception.log; then echo "FAIL: missing exception marker $marker"; cat $(EXCEPTION_TEST_DIR)/serial-exception.log 2>/dev/null || true; exit 1; fi; \
-	done; \
-	if grep -q MICHAEL_OC_EXCEPTION_TEST_FAILED $(EXCEPTION_TEST_DIR)/serial-exception.log; then echo "FAIL: INT3 unexpectedly returned"; cat $(EXCEPTION_TEST_DIR)/serial-exception.log; exit 1; fi; \
-	echo "PASS: IDT installation and CPU exception dispatch (INT3 vector/error code)."
+	python3 scripts/test_exceptions.py --qemu $(QEMU) --iso $(EXCEPTION_TEST_ISO) --work-dir $(EXCEPTION_TEST_DIR)
 
 clean:
 	rm -rf $(BUILD_DIR)
