@@ -19,6 +19,8 @@
 #define ATA_CMD_WRITE 0x30u
 #define ATA_CMD_IDENTIFY 0xECu
 #define ATA_CMD_FLUSH_CACHE 0xE7u
+#define ATA_CMD_FLUSH_CACHE_EXT 0xEAu
+#define ATA_FLUSH_WAIT_LIMIT 100000000u
 
 #define ATA_STATUS_ERR 0x01u
 #define ATA_STATUS_DRQ 0x08u
@@ -34,6 +36,7 @@ static u8 pattern_sector[512];
 static u8 verify_sector[512];
 static u32 disk_sectors;
 static int device_ready;
+static u8 flush_command;
 static u32 self_test_failure_stage;
 static u32 self_test_io_failure_stage;
 static u32 write_failure_stage;
@@ -107,6 +110,7 @@ static int ata_wait_command_complete(void)
 int ata_init(void)
 {
     device_ready = 0;
+    flush_command = 0u;
     disk_sectors = 0u;
 
     outb(ATA_DEVICE, 0xA0u); /* Primary master, IDENTIFY command. */
@@ -151,6 +155,18 @@ int ata_init(void)
         return 0; /* LBA is required by this driver's addressing scheme. */
     }
 
+    /*
+     * IDENTIFY word 83's command-set validity bits must be 01 before its
+     * feature bits are trusted. Some older devices do not advertise flushing.
+     */
+    if ((identify_words[83] & 0xC000u) == 0x4000u) {
+        if ((identify_words[83] & 0x1000u) != 0u) {
+            flush_command = ATA_CMD_FLUSH_CACHE;
+        } else if ((identify_words[83] & 0x2000u) != 0u) {
+            flush_command = ATA_CMD_FLUSH_CACHE_EXT;
+        }
+    }
+
     disk_sectors = (u32)identify_words[60] |
                    ((u32)identify_words[61] << 16);
     if (disk_sectors <= ATA_TEST_LBA || disk_sectors > ATA_LBA28_LIMIT) {
@@ -165,6 +181,26 @@ int ata_init(void)
 u32 ata_sector_count(void)
 {
     return device_ready ? disk_sectors : 0u;
+}
+
+/* Flush only when the device advertises a supported command in IDENTIFY. */
+int ata_flush_cache(void)
+{
+    if (!device_ready) return 0;
+    if (flush_command == 0u) return 1;
+    if (!ata_wait_command_complete()) return 0;
+
+    outb(ATA_STATUS_COMMAND, flush_command);
+    ata_delay_400ns();
+    for (u32 i = 0u; i < ATA_FLUSH_WAIT_LIMIT; ++i) {
+        const u8 status = inb(ATA_STATUS_COMMAND);
+        if (status == 0u || status == 0xFFu) return 0;
+        if ((status & ATA_STATUS_BSY) != 0u) continue;
+        if ((status & (ATA_STATUS_ERR | ATA_STATUS_DF)) != 0u) return 0;
+        if ((status & ATA_STATUS_DRQ) != 0u) continue;
+        return 1;
+    }
+    return 0;
 }
 
 int ata_read_sector(u32 lba, u8 *buffer)
@@ -229,13 +265,6 @@ int ata_write_sector(u32 lba, const u8 *buffer)
         write_failure_stage = 4u;
         return 0;
     }
-
-    outb(ATA_STATUS_COMMAND, ATA_CMD_FLUSH_CACHE);
-    ata_delay_400ns();
-    if (!ata_wait_command_complete()) {
-        write_failure_stage = 5u;
-        return 0;
-    }
     return 1;
 }
 
@@ -268,19 +297,24 @@ int ata_self_test(void)
     }
 
     const int write_ok = ata_write_sector(ATA_TEST_LBA, pattern_sector);
-    const int read_ok = write_ok && ata_read_sector(ATA_TEST_LBA, verify_sector);
+    const int flush_ok = write_ok && ata_flush_cache();
+    const int read_ok = flush_ok && ata_read_sector(ATA_TEST_LBA, verify_sector);
     if (!write_ok) {
         self_test_failure_stage = 20u + ata_last_write_failure_stage();
         self_test_io_failure_stage = ata_last_write_failure_stage();
-    } else if (!read_ok) self_test_failure_stage = 3u;
+    } else if (!flush_ok) self_test_failure_stage = 28u;
+    else if (!read_ok) self_test_failure_stage = 3u;
     else if (!sector_matches(pattern_sector, verify_sector)) self_test_failure_stage = 4u;
 
     /* Always attempt to restore the original scratch-sector contents. */
     const int restore_write_ok = ata_write_sector(ATA_TEST_LBA, original_sector);
+    const int restore_flush_ok = restore_write_ok && ata_flush_cache();
     const int restore_read_ok =
-        restore_write_ok && ata_read_sector(ATA_TEST_LBA, verify_sector);
+        restore_flush_ok && ata_read_sector(ATA_TEST_LBA, verify_sector);
     if (self_test_failure_stage == 0u && !restore_write_ok) {
         self_test_failure_stage = 5u;
+    } else if (self_test_failure_stage == 0u && !restore_flush_ok) {
+        self_test_failure_stage = 8u;
     } else if (self_test_failure_stage == 0u && !restore_read_ok) {
         self_test_failure_stage = 6u;
     } else if (self_test_failure_stage == 0u &&

@@ -445,7 +445,8 @@ int fs_init(void)
     super->inode_size = FS_INODE_SIZE;
     super->data_lba = FS_DATA_LBA;
     super->root_inode = FS_ROOT_INODE;
-    if (!ata_write_sector(FS_SUPER_LBA, sector_buffer)) return 0;
+    if (!ata_write_sector(FS_SUPER_LBA, sector_buffer) ||
+        !ata_flush_cache()) return 0;
 
     filesystem_ready = 1;
     return 1;
@@ -506,7 +507,7 @@ int fs_create(const char *path, u8 type)
         (void)inode_flush(number);
         return 0;
     }
-    return 1;
+    return ata_flush_cache();
 }
 
 int fs_remove(const char *path)
@@ -528,7 +529,7 @@ int fs_remove(const char *path)
         if (!release_data_sector(node->direct[i])) return 0;
     }
     bytes_zero(node, sizeof(*node));
-    return inode_flush(number);
+    return inode_flush(number) && ata_flush_cache();
 }
 
 int fs_list(const char *path, fs_dir_entry_t *entries,
@@ -649,5 +650,5 @@ int fs_write(const char *path, u32 offset, const u8 *buffer, u32 length)
         node->size = new_size;
         if (!inode_flush(number)) return 0;
     }
-    return 1;
+    return ata_flush_cache();
 }
