@@ -38,7 +38,8 @@
 | PIC remapping and EOI handling | Implemented, smoke-tested for timer and keyboard | Legacy PIC remapped to 0x20/0x28; IRQ0 and IRQ1 are enabled, other lines stay masked; EOI is sent to the appropriate PIC |
 | Keyboard scan-code queue | Implemented, end-to-end QEMU test | IRQ handler only queues bytes; the main loop processes them and uses a CLI plus atomic STI/HLT wait to avoid lost wakeups |
 | PIT timer | Implemented, smoke-tested | PIT channel 0 runs at approximately 100 Hz; IRQ0 increments a monotonic tick count; CI requires a marker emitted after at least three ticks |
-| Paging / virtual memory | Not implemented | Allocator still returns directly addressable physical addresses; page tables and virtual address spaces are absent |
+| 32-bit paging | Implemented, runtime self-tested | 4 GiB identity map with 4 KiB PTEs; null page absent; test changes a virtual page from one PMM frame to another, checks data, unmaps it, then restores identity mapping. No per-process isolation yet |
+| Paging / virtual memory | Basic paging implemented; per-process virtual memory not implemented | Static 4 KiB page tables map 4 GiB identity-wise; null page is absent; map/query/unmap APIs pass a PMM frame-aliasing self-test. Page tables are part of kernel BSS and reserved by the PMM. Dynamic page-table allocation and process isolation remain unfinished |
 | Mouse input | Not implemented | No mouse packet decoder or pointer yet |
 | Persistent disk/filesystem | Not implemented | No block driver, filesystem or persistent user files yet |
 | Userspace and system-call API | Not implemented | The UI currently runs in kernel context |
@@ -51,6 +52,7 @@
 - src/multiboot.h — shared Multiboot info and memory-map structures.
 - src/memory.h and src/memory.c — physical frame allocator and allocator self-test.
 - src/interrupts.h, src/interrupts.c and src/interrupts.S — IDT gates, exception stubs, PIC remapping/EOI, keyboard IRQ queue and PIT tick counter.
+- src/paging.h and src/paging.c — identity page tables, page map/query/unmap functions and a physical-frame aliasing self-test.
 - src/kernel.c — serial diagnostics, one-bit canvas, monochrome UI pages, keyboard state handler and IRQ-queued PS/2 input.
 - linker.ld — kernel image layout and exported kernel bounds.
 - grub/grub.cfg — video mode, serial diagnostics and boot entry.
@@ -77,14 +79,14 @@ ISO output: build/michael-oc.iso.
 
 ## Latest verified milestone
 
-GitHub Actions run [38904165482](https://github.com/DarnoPort/Michael-OC/actions/runs/38904165482) passed for commit 0da5253a35c550976efa1da7932912b77a7889a4. CI built both normal and exception-test ISOs, verified the PIT timebase and runtime tick marker, injected keyboard events through QEMU HMP, and triggered INT3 in the test-only image. The serial log reported vector 3 (breakpoint) and a safe guest halt. Later commits close a lost-wakeup race and correct serial marker line endings; the latest commit is being rechecked in CI.
+GitHub Actions run [38904714276](https://github.com/DarnoPort/Michael-OC/actions/runs/38904714276) passed for commit 08ec5e72f63273c8f0f446b29c4f6214ce248d83. CI built the ISO, enabled paging before PMM initialization, booted QEMU through the paging self-test and UI startup, injected keyboard events, and passed the separate INT3 exception-report test. The paging test confirms that a virtual alias can map two distinct physical allocator frames and then be unmapped. The address space is still shared and identity-mapped; this does not establish userspace isolation.
 
 The physical allocator remains a pre-paging allocator: it tracks RAM below 4 GiB in a bitmap in kernel BSS and assumes a single-core boot environment. Its self-test accesses the allocated physical address directly because paging is not enabled.
 
 ## Next tasks
 
-1. Implement paging and virtual memory, including page-table creation, mapping/unmapping, and tests for allocator reservations and invalid accesses.
-2. Add a QEMU block device and persistent filesystem; test create/write/read/delete and data survival across a VM restart.
+1. Add a QEMU block device and persistent filesystem; test create/write/read/delete and data survival across a VM restart.
+2. Replace the all-identity static mapping with dynamic page-table allocation and separate virtual address spaces when the process model is designed.
 3. Define a kernel-to-app ABI and a genuine executable loader; implement install/remove after storage and executable validation work.
 4. Define a kernel-to-app ABI, an executable format/loader and a safe external-app installation/removal mechanism.
 5. Implement real file manager, editor, system monitor and installer applications using that interface.
