@@ -6,31 +6,25 @@ Michael OC is an independent operating-system project for QEMU on Ubuntu Linux. 
 
 The repository was empty at project start. The first milestone establishes a reproducible 32-bit x86 Multiboot kernel, a GRUB bootable ISO, serial diagnostics, a black-and-white VGA text bootstrap screen, and an automated QEMU boot smoke test. **This is an early kernel bootstrap, not a completed operating system.** It does not yet provide a graphical desktop, persistent filesystem, general application loader, or the built-in applications listed in the project goals.
 
-Implementation and verified status are tracked in [`DEVELOPMENT.md`](DEVELOPMENT.md).
+Implementation and verified status are tracked in DEVELOPMENT.md.
 
 ## Build requirements (Ubuntu)
 
-```sh
-sudo apt update
-sudo apt install build-essential gcc-multilib grub-pc-bin xorriso qemu-system-x86 make
-```
+    sudo apt update
+    sudo apt install build-essential gcc-multilib grub-pc-bin xorriso mtools qemu-system-x86 make
 
 ## Build and run
 
-```sh
-make
-make run
-```
+    make
+    make run
 
-The generated bootable ISO is `build/michael-oc.iso`. Close QEMU to exit the interactive run.
+The generated bootable ISO is build/michael-oc.iso. Close QEMU to exit the interactive run.
 
 Run the headless boot smoke test:
 
-```sh
-make test
-```
+    make test
 
-The smoke test boots the ISO in QEMU and verifies that the kernel emits `MICHAEL_OC_BOOT_OK` over the emulated serial port. This confirms kernel entry, not full OS readiness.
+The smoke test boots the ISO in QEMU and verifies that the kernel emits MICHAEL_OC_BOOT_OK over the emulated serial port. This confirms kernel entry, not full OS readiness.
 
 ## Project direction
 
