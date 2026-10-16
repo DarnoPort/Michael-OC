@@ -105,6 +105,20 @@ static int ata_wait_data_request(void)
     return 0;
 }
 
+/* Wait until a command has transferred its data and cleared DRQ. */
+static int ata_wait_command_complete(void)
+{
+    for (u32 i = 0u; i < ATA_WAIT_LIMIT; ++i) {
+        const u8 status = inb(ATA_STATUS_COMMAND);
+        if (status == 0u || status == 0xFFu) return 0;
+        if ((status & ATA_STATUS_BSY) != 0u) continue;
+        if ((status & (ATA_STATUS_ERR | ATA_STATUS_DF)) != 0u) return 0;
+        if ((status & ATA_STATUS_DRQ) != 0u) continue;
+        return 1;
+    }
+    return 0;
+}
+
 int ata_init(void)
 {
     device_ready = 0;
@@ -171,7 +185,7 @@ u32 ata_sector_count(void)
 int ata_read_sector(u32 lba, u8 *buffer)
 {
     if (!device_ready || buffer == 0 || lba >= disk_sectors ||
-        lba >= ATA_LBA28_LIMIT || !ata_wait_not_busy()) {
+        lba >= ATA_LBA28_LIMIT || !ata_wait_command_complete()) {
         return 0;
     }
 
@@ -192,13 +206,13 @@ int ata_read_sector(u32 lba, u8 *buffer)
         buffer[i * 2u + 1u] = (u8)(word >> 8);
     }
     ata_delay_400ns();
-    return ata_wait_not_busy();
+    return ata_wait_command_complete();
 }
 
 int ata_write_sector(u32 lba, const u8 *buffer)
 {
     if (!device_ready || buffer == 0 || lba >= disk_sectors ||
-        lba >= ATA_LBA28_LIMIT || !ata_wait_not_busy()) {
+        lba >= ATA_LBA28_LIMIT || !ata_wait_command_complete()) {
         return 0;
     }
 
@@ -219,13 +233,13 @@ int ata_write_sector(u32 lba, const u8 *buffer)
         outw(ATA_DATA, word);
     }
     ata_delay_400ns();
-    if (!ata_wait_not_busy()) {
+    if (!ata_wait_command_complete()) {
         return 0;
     }
 
     outb(ATA_STATUS_COMMAND, ATA_CMD_FLUSH_CACHE);
     ata_delay_400ns();
-    return ata_wait_not_busy();
+    return ata_wait_command_complete();
 }
 
 static int sector_matches(const u8 *left, const u8 *right)

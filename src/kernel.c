@@ -872,6 +872,8 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
     halt_forever();
 #endif
 
+    (void)filesystem_ready;
+
     if (!initialize_graphics(multiboot_info)) {
         serial_write("MICHAEL_OC_FB_UNAVAILABLE\r\n");
         show_vga_fallback();
