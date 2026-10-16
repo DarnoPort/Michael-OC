@@ -5,8 +5,8 @@
 - Date: 2026-10-16
 - The GitHub repository was initially empty; the project started from a new bootable-kernel baseline.
 - Target: Ubuntu Linux + QEMU, 32-bit x86 guest, GRUB Multiboot v1.
-- Toolchain: freestanding C, GNU assembler/binutils, GRUB rescue ISO, xorriso, mtools, QEMU, and Python 3 for the QEMU monitor test.
-- A later architecture change is allowed if necessary; avoid redesigning the working boot path without a concrete reason.
+- Toolchain: freestanding C, GNU assembler/binutils, GRUB rescue ISO, xorriso, mtools, QEMU and Python 3 for the QEMU monitor test.
+- The architecture can evolve if necessary, but do not redesign the working boot path without a concrete reason.
 
 ## Status key
 
@@ -26,26 +26,31 @@
 | Serial diagnostics | Implemented, smoke-tested | COM1 output is used by automated tests and diagnosis |
 | Packed one-bit canvas | Implemented, smoke-tested | 800x600 canvas, one bit per pixel; set/clear self-test required by CI |
 | Monochrome framebuffer rendering | Implemented, smoke-tested | GRUB mode 800x600x32; only black and full RGB white are emitted |
-| Keyboard-driven diagnostic pages | Implemented, smoke-tested | Home, system-status, keyboard-test and framebuffer-test screens |
-| Keyboard handling state logic | Implemented, self-tested | Tests navigation, key make code, break-code filtering, and Escape return |
-| PS/2 keyboard polling | Implemented, end-to-end QEMU test added | QEMU HMP injects 2, A, Escape; CI checks page change and scan-code marker |
+| Keyboard-driven diagnostic pages | Implemented, smoke-tested | Home, system status, keyboard test and framebuffer test |
+| Keyboard handling state logic | Implemented, self-tested | Navigation, make code, break-code filtering and Escape return |
+| PS/2 keyboard polling | Implemented, end-to-end QEMU test | QEMU HMP injects 2, A and Escape; CI checks page transition and scan-code marker |
+| Multiboot memory-map parsing | Implemented, smoke-tested | Parses variable-sized entries and frees only complete pages covered by type-1 RAM ranges |
+| Physical page allocator | Implemented, smoke-tested | Two bitmaps track used and allocated frames below 4 GiB; 4096-byte pages; free count and double-free protection |
+| Memory-region reservation | Implemented, smoke-tested | Reserves low 1 MiB, kernel image including BSS, Multiboot info/map, boot modules and framebuffer |
+| Physical-memory allocator self-test | Implemented, smoke-tested | Allocates one page, checks alignment/count, writes and reads a value, frees and checks count restoration and double-free rejection |
+| Paging / virtual memory | Not implemented | The current allocator returns physical addresses and runs before paging |
 | Mouse input | Not implemented | No mouse packet decoder or pointer yet |
-| Full desktop/window manager | Not implemented | Current UI uses full-screen diagnostic pages, not movable/resizable windows |
-| Physical memory allocator/paging | Not implemented | No allocator or virtual memory management yet |
 | Interrupt/exception framework | Not implemented | Keyboard input polls the controller with interrupts disabled |
-| Persistent disk/filesystem | Not implemented | No block driver, filesystem, or persistent user files yet |
+| Persistent disk/filesystem | Not implemented | No block driver, filesystem or persistent user files yet |
 | Userspace and system-call API | Not implemented | The UI currently runs in kernel context |
-| External app loading/install/remove | Not implemented | No executable loader, app ABI, or package format yet |
-| File manager/editor/monitor/installer apps | Not implemented | These depend on storage and a stable application interface |
+| External app loading/install/remove | Not implemented | No executable loader, app ABI or package format yet |
+| File manager/editor/monitor/installer apps | Not implemented | These depend on persistent storage and a stable application interface |
 
 ## Source layout
 
 - src/boot.S — Multiboot header, stack and C entry transfer.
+- src/multiboot.h — shared Multiboot info and memory-map structures.
+- src/memory.h and src/memory.c — physical frame allocator and allocator self-test.
 - src/kernel.c — serial diagnostics, one-bit canvas, monochrome UI pages, keyboard state handler and polled PS/2 input.
-- linker.ld — kernel image layout with RX and RW load segments.
+- linker.ld — kernel image layout and exported kernel bounds.
 - grub/grub.cfg — video mode, serial diagnostics and boot entry.
 - Makefile — kernel/ISO build, run, tool checks and test targets.
-- scripts/test_keyboard_input.py — QEMU HMP key-injection smoke test.
+- scripts/test_keyboard_input.py — QEMU HMP key-injection test.
 - .github/workflows/build.yml — Ubuntu CI build, QEMU test and ISO artifact upload.
 - README.md — setup, build, run, controls and known limitations.
 
@@ -65,22 +70,22 @@ From the repository root:
 
 ISO output: build/michael-oc.iso.
 
-## Verification
+## Latest verified milestone
 
-The last completed CI revision compiled the initial keyboard UI and passed its original boot/framebuffer smoke test. The current commit strengthens that test with additional input-state markers and a separate QEMU HMP test which injects keys and checks the corresponding serial events. Update this record only after that run completes.
+GitHub Actions run [38852152656](https://github.com/DarnoPort/Michael-OC/actions/runs/38852152656) passed at commit 5777a5aafa826e577fa01d1e5b25757706ba1fc4. The pipeline compiled the kernel and memory module, checked the Multiboot header, generated the ISO, booted QEMU, required the memory manager and monochrome UI self-test markers, passed the QEMU HMP key-injection test, and uploaded the ISO artifact.
 
-The HMP test covers a real QEMU-generated keyboard event reaching the polling driver, opening the keyboard test page, reporting A's make scancode, and returning home with Escape. It does not test a physical keyboard, mouse, or interrupt-driven input.
+The allocator is intentionally only a physical frame allocator at this stage. Paging, virtual address spaces and concurrency protection are not implemented. It tracks RAM below 4 GiB using a bitmap in kernel BSS and assumes the current single-core, pre-paging boot environment. The page self-test uses direct physical addressing because paging is not enabled.
 
 ## Next tasks
 
-1. Confirm the injected-key QEMU test passes in CI; fix timing or monitor interaction based on logs if needed.
-2. Add mouse support and later migrate polling input to a properly initialized interrupt/IDT framework.
-3. Implement memory-map handling and a physical page/frame allocator, then paging.
+1. Add an IDT, exception handlers and a reliable diagnostic path for CPU faults.
+2. Migrate PS/2 input from polling to interrupt-driven input after the interrupt framework is stable.
+3. Add paging and a virtual memory model, with tests for page mapping and unmapping.
 4. Add a block device and persistent filesystem in a QEMU disk image; test that data survives restarts.
 5. Define a stable kernel-to-app interface, executable format/loader, and application installation/removal.
-6. Implement file manager, editor, system monitor, and installer as real, independently launchable applications.
-7. Add a window manager if it is justified by the rest of the architecture.
+6. Implement file manager, editor, system monitor and installer as real, independently launchable applications.
+7. Add mouse support and a proper desktop/window manager after the storage and app interfaces exist.
 
 ## Verification rules
 
-A source file existing is not proof it runs. Distinguish startup, logic self-tests, injected input, persistence after reboot, and full feature completion. Do not mark a feature smoke-tested without a relevant passing test.
+A source file existing is not proof it runs. Distinguish boot, allocator self-test, injected input, persistence after reboot and full feature completion. Do not mark a feature smoke-tested without a relevant passing test.
