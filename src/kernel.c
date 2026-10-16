@@ -710,22 +710,30 @@ static void keyboard_irq_loop(void)
 
     for (;;) {
         u8 scancode;
-        if (interrupts_read_keyboard_scancode(&scancode)) {
-            const enum ui_screen previous_screen = active_screen;
-            if (handle_ui_scancode(scancode)) {
-                if (active_screen != previous_screen) {
-                    log_ui_screen_event();
-                } else if (active_screen == UI_SCREEN_KEYBOARD) {
-                    serial_write("MICHAEL_OC_UI_KEY_SCANCODE=");
-                    serial_write_hex((u32)scancode);
-                    serial_write("\r\n");
-                }
-                render_active_screen();
-                mono_flush_framebuffer();
-            }
-        } else {
-            /* STI blocks IRQ delivery until the following HLT instruction. */
+
+        /*
+         * Check the queue with IF clear. If it is empty, STI;HLT is an atomic
+         * sleep transition: an IRQ arriving before STI remains pending and
+         * wakes HLT, so a one-off key cannot be stranded in the queue.
+         */
+        __asm__ volatile ("cli" : : : "memory");
+        if (!interrupts_read_keyboard_scancode(&scancode)) {
             __asm__ volatile ("sti; hlt" : : : "memory");
+            continue;
+        }
+        __asm__ volatile ("sti" : : : "memory");
+
+        const enum ui_screen previous_screen = active_screen;
+        if (handle_ui_scancode(scancode)) {
+            if (active_screen != previous_screen) {
+                log_ui_screen_event();
+            } else if (active_screen == UI_SCREEN_KEYBOARD) {
+                serial_write("MICHAEL_OC_UI_KEY_SCANCODE=");
+                serial_write_hex((u32)scancode);
+                serial_write("\r\n");
+            }
+            render_active_screen();
+            mono_flush_framebuffer();
         }
     }
 }
