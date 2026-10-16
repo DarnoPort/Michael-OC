@@ -35,7 +35,7 @@
 | Physical-memory allocator self-test | Implemented, smoke-tested | Allocates one page, checks alignment/count, writes and reads a value, frees and checks count restoration and double-free rejection |
 | Paging / virtual memory | Not implemented | The current allocator returns physical addresses and runs before paging |
 | Mouse input | Not implemented | No mouse packet decoder or pointer yet |
-| CPU exception IDT and fatal handler | Implemented, QEMU-tested by this change | Gates for vectors 0–31; separate test kernel triggers `INT3` and checks vector/error-code output. Hardware IRQ routing and recovery are not implemented |
+| CPU exception IDT and fatal handler | Implemented; runtime test pending | Gates for vectors 0–31; separate test kernel triggers `INT3` and checks vector/error-code output. Hardware IRQ routing and recovery are not implemented |
 | Persistent disk/filesystem | Not implemented | No block driver, filesystem or persistent user files yet |
 | Userspace and system-call API | Not implemented | The UI currently runs in kernel context |
 | External app loading/install/remove | Not implemented | No executable loader, app ABI or package format yet |
@@ -43,7 +43,7 @@
 
 ## Source layout
 
-- src/boot.S — Multiboot header, stack and C entry transfer.
+- src/boot.S — Multiboot header, stack, owned flat GDT, and C entry transfer.
 - src/multiboot.h — shared Multiboot info and memory-map structures.
 - src/memory.h and src/memory.c — physical frame allocator and allocator self-test.
 - src/kernel.c — serial diagnostics, one-bit canvas, monochrome UI pages, keyboard state handler and polled PS/2 input.
