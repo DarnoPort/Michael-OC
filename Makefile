@@ -105,8 +105,8 @@ test-exception: $(EXCEPTION_TEST_ISO)
 	@command -v $(QEMU) >/dev/null || { echo "Missing $(QEMU); install qemu-system-x86"; exit 1; }
 	@command -v $(TIMEOUT) >/dev/null || { echo "Missing timeout (GNU coreutils)"; exit 1; }
 	@rm -f $(BUILD_DIR)/serial-exception.log
-	@set +e; $(TIMEOUT) 3s $(QEMU) -m 128M -cdrom $(EXCEPTION_TEST_ISO) -display none -monitor none -serial file:$(BUILD_DIR)/serial-exception.log -no-reboot -no-shutdown; rc=$$?; set -e; \
-	if [ "$$rc" -ne 124 ]; then echo "FAIL: exception test QEMU returned $$rc (expected timeout 124 after halted guest)"; cat $(BUILD_DIR)/serial-exception.log 2>/dev/null || true; exit 1; fi; \
+	@set +e; $(TIMEOUT) 3s $(QEMU) -m 128M -cdrom $(EXCEPTION_TEST_ISO) -display none -monitor none -serial file:$(BUILD_DIR)/serial-exception.log -d int,cpu_reset -D $(BUILD_DIR)/exception-qemu.log -no-reboot -no-shutdown; rc=$$?; set -e; \
+	if [ "$$rc" -ne 124 ]; then echo "FAIL: exception test QEMU returned $$rc (expected timeout 124 after halted guest)"; cat $(BUILD_DIR)/serial-exception.log 2>/dev/null || true; tail -n 80 $(BUILD_DIR)/exception-qemu.log 2>/dev/null || true; exit 1; fi; \
 	for marker in MICHAEL_OC_IDT_OK MICHAEL_OC_EXCEPTION_TEST_TRIGGER "MICHAEL_OC_FATAL_EXCEPTION vector=0x00000003" "name=breakpoint" "System halted."; do \
 		if ! grep -q "$$marker" $(BUILD_DIR)/serial-exception.log; then echo "FAIL: exception test missing marker $$marker"; cat $(BUILD_DIR)/serial-exception.log 2>/dev/null || true; exit 1; fi; \
 	done; \

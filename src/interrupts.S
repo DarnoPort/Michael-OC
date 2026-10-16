@@ -66,9 +66,7 @@ ISR_NOERR 31
 isr_common_stub:
     cld
     pusha
-    movw $0x10, %ax
-    movw %ax, %ds
-    movw %ax, %es
+    /* Preserve the flat data selectors supplied by the Multiboot loader. */
     pushl %esp
     call interrupt_dispatch
     addl $4, %esp

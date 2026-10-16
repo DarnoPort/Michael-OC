@@ -8,7 +8,6 @@
 
 #define COM1 0x3F8u
 #define IDT_ENTRIES 32u
-#define KERNEL_CODE_SELECTOR 0x08u
 #define IDT_INTERRUPT_GATE 0x8Eu
 
 typedef struct __attribute__((packed)) {
@@ -108,6 +107,16 @@ void interrupts_init(void)
 {
     serial_init();
 
+    /*
+     * Multiboot guarantees a valid flat code segment but the selector value
+     * belongs to the bootloader's GDT, so do not assume it is always 0x08.
+     */
+    u16 code_selector;
+    __asm__ volatile ("mov %%cs, %0" : "=r"(code_selector));
+    serial_write("MICHAEL_OC_IDT_CS=");
+    serial_write_hex((u32)code_selector);
+    serial_write("\\r\\n");
+
     for (u32 vector = 0u; vector < IDT_ENTRIES; ++vector) {
         const u32 handler = isr_stub_table[vector];
         if (handler == 0u) {
@@ -115,7 +124,7 @@ void interrupts_init(void)
         }
 
         idt[vector].offset_low = (u16)(handler & 0xFFFFu);
-        idt[vector].selector = KERNEL_CODE_SELECTOR;
+        idt[vector].selector = code_selector;
         idt[vector].zero = 0u;
         idt[vector].type_attr = IDT_INTERRUPT_GATE;
         idt[vector].offset_high = (u16)(handler >> 16);
