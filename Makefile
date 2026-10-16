@@ -35,7 +35,7 @@ ASFLAGS := -m32 -ffreestanding -fno-pie -fno-pic \
 	-fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables
 LDFLAGS := -m elf_i386 -T linker.ld -nostdlib
 
-.PHONY: all kernel iso run test test-exception test-paging-fault test-storage test-apps test-mocapp-installer clean check-tools
+.PHONY: all kernel iso run test test-exception test-paging-fault test-storage test-apps test-mocapp-installer test-mouse clean check-tools
 
 all: check-tools iso
 
@@ -193,11 +193,16 @@ test: $(ISO) $(DISK_IMAGE)
 	echo "PASS: kernel boot, 1-bit canvas, UI input logic, framebuffer output, and keyboard IRQ startup."
 
 	python3 scripts/test_keyboard_input.py --qemu $(QEMU) --iso $(ISO) --disk $(DISK_IMAGE) --work-dir $(BUILD_DIR)
+	$(MAKE) test-mouse
 	$(MAKE) test-exception
 	$(MAKE) test-paging-fault
 	$(MAKE) test-storage
 	$(MAKE) test-apps
 	$(MAKE) test-mocapp-installer
+
+test-mouse: $(ISO) $(DISK_IMAGE)
+	@command -v $(QEMU) >/dev/null || { echo "Missing $(QEMU); install qemu-system-x86"; exit 1; }
+	python3 scripts/test_mouse_input.py --qemu $(QEMU) --iso $(ISO) --disk $(DISK_IMAGE) --work-dir $(BUILD_DIR)
 
 test-exception: $(EXCEPTION_TEST_ISO)
 	@command -v $(QEMU) >/dev/null || { echo "Missing $(QEMU); install qemu-system-x86"; exit 1; }

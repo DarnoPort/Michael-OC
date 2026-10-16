@@ -27,6 +27,10 @@
 
 #define KEYBOARD_QUEUE_SIZE 64u
 #define KEYBOARD_QUEUE_MASK (KEYBOARD_QUEUE_SIZE - 1u)
+#define MOUSE_QUEUE_SIZE 16u
+#define MOUSE_QUEUE_MASK (MOUSE_QUEUE_SIZE - 1u)
+#define PS2_MOUSE_ACK 0xFAu
+#define PS2_MOUSE_RESEND 0xFEu
 
 typedef struct __attribute__((packed)) {
     u16 offset_low;
@@ -50,8 +54,20 @@ static volatile u8 keyboard_queue_read;
 static volatile u8 keyboard_queue_write;
 static volatile u32 keyboard_queue_dropped;
 
+static volatile int mouse_queue_dx[MOUSE_QUEUE_SIZE];
+static volatile int mouse_queue_dy[MOUSE_QUEUE_SIZE];
+static volatile u8 mouse_queue_buttons[MOUSE_QUEUE_SIZE];
+static volatile u8 mouse_queue_read;
+static volatile u8 mouse_queue_write;
+static volatile u32 mouse_queue_dropped;
+static volatile u8 mouse_packet[3];
+static volatile u8 mouse_packet_phase;
+static int mouse_available;
+
 extern void (*isr_stub_table[IDT_EXCEPTION_COUNT])(void);
 extern void (*irq_stub_table[IDT_IRQ_COUNT])(void);
+
+static void keyboard_queue_push(u8 scancode);
 
 static inline void outb(u16 port, u8 value)
 {
@@ -205,6 +221,63 @@ static int ps2_enable_keyboard_irq(void)
     return ps2_wait_input_empty();
 }
 
+static int ps2_mouse_wait_response(void)
+{
+    for (u32 wait = 0u; wait < 1000000u; ++wait) {
+        const u8 status = inb(PS2_STATUS);
+        if ((status & PS2_OUTPUT_FULL) == 0u) continue;
+        const u8 value = inb(PS2_DATA);
+        if ((status & PS2_AUX_DATA) != 0u) {
+            if (value == PS2_MOUSE_ACK) return 1;
+            if (value == PS2_MOUSE_RESEND) return 2;
+            continue;
+        }
+        /* Preserve any keyboard byte observed while waiting for the mouse. */
+        keyboard_queue_push(value);
+    }
+    return 0;
+}
+
+static int ps2_mouse_command(u8 command)
+{
+    for (u32 attempt = 0u; attempt < 3u; ++attempt) {
+        if (!ps2_wait_input_empty()) return 0;
+        outb(PS2_STATUS, 0xD4u); /* Next data byte is for the auxiliary port. */
+        if (!ps2_wait_input_empty()) return 0;
+        outb(PS2_DATA, command);
+
+        const int response = ps2_mouse_wait_response();
+        if (response == 1) return 1;
+        if (response != 2) return 0;
+    }
+    return 0;
+}
+
+static int ps2_enable_mouse_irq(void)
+{
+    if (!ps2_wait_input_empty()) return 0;
+    outb(PS2_STATUS, 0xA8u); /* Enable the auxiliary/second PS/2 port. */
+
+    if (!ps2_wait_input_empty()) return 0;
+    outb(PS2_STATUS, 0x20u); /* Read controller command byte. */
+    if (!ps2_wait_output_full()) return 0;
+    u8 command_byte = inb(PS2_DATA);
+    command_byte |= 0x02u;        /* Enable IRQ12. */
+    command_byte &= (u8)~0x20u;   /* Enable the auxiliary port. */
+
+    if (!ps2_wait_input_empty()) return 0;
+    outb(PS2_STATUS, 0x60u);
+    if (!ps2_wait_input_empty()) return 0;
+    outb(PS2_DATA, command_byte);
+    if (!ps2_wait_input_empty()) return 0;
+
+    if (!ps2_mouse_command(0xF6u) || /* Set defaults. */
+        !ps2_mouse_command(0xF4u)) { /* Enable packet reporting. */
+        return 0;
+    }
+    return 1;
+}
+
 void interrupts_init(void)
 {
     for (u32 vector = 0u; vector < IDT_EXCEPTION_COUNT; ++vector) {
@@ -234,9 +307,17 @@ void interrupts_init(void)
         halt_forever();
     }
 
-    /* IRQ1 only; timer, mouse and other device IRQs remain masked for now. */
-    outb(PIC_SLAVE_DATA, 0xFFu);
-    outb(PIC_MASTER_DATA, 0xFDu);
+    mouse_available = ps2_enable_mouse_irq();
+    if (mouse_available) {
+        /* Unmask IRQ1, IRQ2 (cascade), and slave IRQ12 (PS/2 auxiliary). */
+        outb(PIC_SLAVE_DATA, 0xEFu);
+        outb(PIC_MASTER_DATA, 0xF9u);
+        serial_write("MICHAEL_OC_MOUSE_IRQ_OK\r\n");
+    } else {
+        outb(PIC_SLAVE_DATA, 0xFFu);
+        outb(PIC_MASTER_DATA, 0xFDu);
+        serial_write("MICHAEL_OC_MOUSE_IRQ_UNAVAILABLE\r\n");
+    }
     serial_write("MICHAEL_OC_KEYBOARD_IRQ_OK\r\n");
 }
 
@@ -257,6 +338,48 @@ int keyboard_try_get_scancode(u8 *scancode)
     return 1;
 }
 
+static void mouse_queue_push(int dx, int dy, u8 buttons)
+{
+    const u8 write_index = mouse_queue_write;
+    const u8 next = (u8)((write_index + 1u) & MOUSE_QUEUE_MASK);
+    if (next == mouse_queue_read) {
+        ++mouse_queue_dropped;
+        return;
+    }
+
+    mouse_queue_dx[write_index] = dx;
+    mouse_queue_dy[write_index] = dy;
+    mouse_queue_buttons[write_index] = buttons;
+    mouse_queue_write = next;
+}
+
+static int mouse_sign_extend(u8 value)
+{
+    return (value & 0x80u) != 0u ? (int)value - 256 : (int)value;
+}
+
+static void mouse_packet_push(u8 value)
+{
+    if (mouse_packet_phase == 0u) {
+        /* Bit 3 is always set in the first byte; use it to re-sync packets. */
+        if ((value & 0x08u) == 0u) return;
+        mouse_packet[0] = value;
+        mouse_packet_phase = 1u;
+        return;
+    }
+
+    mouse_packet[mouse_packet_phase++] = value;
+    if (mouse_packet_phase < 3u) return;
+    mouse_packet_phase = 0u;
+
+    const u8 flags = mouse_packet[0];
+    if ((flags & 0xC0u) != 0u) return; /* Discard overflowed 8-bit deltas. */
+
+    const int dx = mouse_sign_extend(mouse_packet[1]);
+    const int dy = -mouse_sign_extend(mouse_packet[2]);
+    mouse_queue_push(dx, dy, (u8)(flags & 0x07u));
+}
+
 static void keyboard_queue_push(u8 scancode)
 {
     const u8 write_index = keyboard_queue_write;
@@ -270,6 +393,22 @@ static void keyboard_queue_push(u8 scancode)
     keyboard_queue_write = next;
 }
 
+int mouse_is_available(void)
+{
+    return mouse_available;
+}
+
+int mouse_try_get_event(mouse_event_t *event)
+{
+    if (event == 0 || mouse_queue_read == mouse_queue_write) return 0;
+    const u8 index = mouse_queue_read;
+    event->dx = mouse_queue_dx[index];
+    event->dy = mouse_queue_dy[index];
+    event->buttons = mouse_queue_buttons[index];
+    mouse_queue_read = (u8)((index + 1u) & MOUSE_QUEUE_MASK);
+    return 1;
+}
+
 void interrupt_irq_handler(u32 irq_number)
 {
     if (irq_number == 1u) {
@@ -277,6 +416,15 @@ void interrupt_irq_handler(u32 irq_number)
         if ((status & PS2_OUTPUT_FULL) != 0u &&
             (status & PS2_AUX_DATA) == 0u) {
             keyboard_queue_push(inb(PS2_DATA));
+        }
+    }
+
+    if (irq_number == 12u) {
+        const u8 status = inb(PS2_STATUS);
+        if ((status & PS2_OUTPUT_FULL) != 0u) {
+            const u8 value = inb(PS2_DATA);
+            if ((status & PS2_AUX_DATA) != 0u) mouse_packet_push(value);
+            else keyboard_queue_push(value);
         }
     }
 

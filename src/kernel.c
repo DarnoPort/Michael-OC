@@ -45,6 +45,9 @@ enum ui_screen {
 };
 static enum ui_screen active_screen = UI_SCREEN_HOME;
 static u8 last_key_scancode;
+static u32 ui_mouse_x = MONO_WIDTH / 2u;
+static u32 ui_mouse_y = MONO_HEIGHT / 2u;
+static u8 ui_mouse_buttons;
 
 #define UI_EDITOR_CAPACITY 16384u
 #define UI_EDITOR_LINE_WIDTH 100u
@@ -467,7 +470,7 @@ static void draw_system_screen(void)
 
     mono_draw_text(80u, 322u, "CANVAS: 1 BIT / PIXEL", 2u, 0);
     mono_draw_text(80u, 370u, "DISPLAY: BLACK / WHITE", 2u, 0);
-    mono_draw_text(80u, 418u, "INPUT: PS/2 IRQ1", 2u, 0);
+    mono_draw_text(80u, 418u, mouse_is_available() ? "INPUT: PS2 KEY/MOUSE" : "INPUT: PS/2 KEY ONLY", 2u, 0);
     mono_draw_text(80u, 454u, pmm_is_initialized() ? "PMM: READY" : "PMM: NOT READY", 2u, 0);
     mono_draw_text(80u, 490u, "FREE PAGES:", 1u, 0);
     mono_draw_text(80u, 515u, fs_is_mounted() ? "FS: MOCFS1 READY" : "FS: UNAVAILABLE", 1u, 0);
@@ -1108,6 +1111,23 @@ static void draw_text_editor(void)
     }
 }
 
+static void draw_mouse_cursor(void)
+{
+    if (!mouse_is_available()) return;
+
+    /* A black-edged, white-filled pointer stays visible on either background. */
+    for (u32 row = 0u; row < 14u; ++row) {
+        const u32 width = row / 2u + 1u;
+        for (u32 col = 0u; col < width; ++col) {
+            const u32 x = ui_mouse_x + col;
+            const u32 y = ui_mouse_y + row;
+            mono_put_pixel(x, y, 0);
+            if (row >= 3u && col > 0u && col + 1u < width)
+                mono_put_pixel(x, y, 1);
+        }
+    }
+}
+
 static void render_active_screen(void)
 {
     switch (active_screen) {
@@ -1120,6 +1140,7 @@ static void render_active_screen(void)
     case UI_SCREEN_HOME:
     default: draw_home_screen(); break;
     }
+    draw_mouse_cursor();
 }
 
 static void ui_start_file_dialog(enum ui_file_dialog_mode mode)
@@ -1678,11 +1699,125 @@ static void log_ui_screen_event(void)
     }
 }
 
+static void ui_mouse_click(u32 x, u32 y)
+{
+    serial_write("MICHAEL_OC_MOUSE_CLICK\r\n");
+
+    if (active_screen == UI_SCREEN_HOME) {
+        if (x >= 65u && x <= 280u && y >= 175u && y <= 212u) {
+            (void)handle_ui_scancode(0x02u);
+        } else if (x >= 65u && x <= 280u && y >= 215u && y <= 250u) {
+            (void)handle_ui_scancode(0x03u);
+        } else if (x >= 65u && x <= 280u && y >= 252u && y <= 292u) {
+            (void)handle_ui_scancode(0x04u);
+        } else if (x >= 395u && x <= 610u && y >= 175u && y <= 212u) {
+            (void)handle_ui_scancode(0x05u);
+        } else if (x >= 395u && x <= 610u && y >= 215u && y <= 250u) {
+            (void)handle_ui_scancode(0x06u);
+        }
+        return;
+    }
+
+    if (active_screen == UI_SCREEN_FILES) {
+        if (ui_file_dialog != UI_FILE_DIALOG_NONE) {
+            if (ui_file_dialog == UI_FILE_DIALOG_DELETE_CONFIRM &&
+                y >= 260u && y <= 300u) {
+                (void)handle_ui_scancode(x < 400u ? 0x15u : 0x31u);
+            }
+            return; /* File names are still typed with the keyboard. */
+        }
+        if (y >= 153u && y < 453u && x >= 80u && x <= 720u) {
+            const u32 selected = (y - 153u) / 25u;
+            if (selected < ui_file_count && selected < UI_FILE_VISIBLE_ENTRIES) {
+                ui_file_selection = selected;
+                (void)handle_ui_scancode(0x1Cu); /* Single-click opens an entry. */
+            }
+            return;
+        }
+        if (y >= 112u && y <= 128u) {
+            if (x >= 250u && x < 282u) (void)handle_ui_scancode(0x31u);      /* N */
+            else if (x >= 282u && x < 310u) (void)handle_ui_scancode(0x20u); /* D */
+            else if (x >= 310u && x < 360u) (void)handle_ui_scancode(0x13u); /* R */
+            else if (x >= 360u && x < 430u) (void)handle_ui_scancode(0x2Du); /* X */
+        } else if (y >= 485u && y <= 510u) {
+            if (x < 210u) (void)handle_ui_scancode(0x3Cu);                  /* F2 */
+            else if (x < 290u) (void)handle_ui_scancode(0x31u);
+            else if (x < 370u) (void)handle_ui_scancode(0x20u);
+            else if (x < 445u) (void)handle_ui_scancode(0x13u);
+        } else if (y >= 520u && y <= 550u && x < 190u) {
+            (void)handle_ui_scancode(0x01u);
+        }
+        return;
+    }
+
+    if (active_screen == UI_SCREEN_EDITOR) {
+        if (editor_exit_confirm && y >= 235u && y <= 300u) {
+            (void)handle_ui_scancode(x < 400u ? 0x3Cu : 0x01u);
+        } else if (y >= 138u && y < 466u && x >= 80u && x < 680u) {
+            const u32 visual_line = editor_first_line + (y - 142u) / 18u;
+            const u32 visual_column = (x - 80u) / 6u;
+            u32 line_start = 0u, line_end = 0u;
+            if (editor_find_visual_line(visual_line, &line_start, &line_end)) {
+                const u32 line_length = line_end - line_start;
+                editor_cursor = line_start +
+                    (visual_column < line_length ? visual_column : line_length);
+                editor_exit_confirm = 0;
+            }
+        } else if (y >= 485u && y <= 510u && x < 200u) {
+            (void)handle_ui_scancode(0x3Cu); /* F2 */
+        } else if (y >= 520u && y <= 550u && x < 190u) {
+            (void)handle_ui_scancode(0x01u);
+        }
+        return;
+    }
+
+    if (active_screen == UI_SCREEN_APP) {
+        if (y >= 470u && y <= 510u) {
+            if (x < 290u) (void)handle_ui_scancode(0x01u);
+            else if (x >= 560u) (void)handle_ui_scancode(0x3Bu); /* F1 */
+        }
+        return;
+    }
+
+    if (y >= 520u && y <= 550u && x >= 75u && x <= 200u)
+        (void)handle_ui_scancode(0x01u);
+}
+
+static void ui_handle_mouse_event(const mouse_event_t *event)
+{
+    const int next_x = (int)ui_mouse_x + event->dx;
+    const int next_y = (int)ui_mouse_y + event->dy;
+    ui_mouse_x = next_x < 0 ? 0u :
+                 (next_x >= (int)canvas_width ? canvas_width - 1u : (u32)next_x);
+    ui_mouse_y = next_y < 0 ? 0u :
+                 (next_y >= (int)canvas_height ? canvas_height - 1u : (u32)next_y);
+
+    const int clicked = (event->buttons & 0x01u) != 0u &&
+                        (ui_mouse_buttons & 0x01u) == 0u;
+    ui_mouse_buttons = event->buttons;
+    serial_write("MICHAEL_OC_MOUSE_EVENT\r\n");
+    serial_write("MICHAEL_OC_MOUSE_POSITION=");
+    serial_write_hex(ui_mouse_x);
+    serial_write(",");
+    serial_write_hex(ui_mouse_y);
+    serial_write("\r\n");
+
+    if (clicked) ui_mouse_click(ui_mouse_x, ui_mouse_y);
+}
+
 static void keyboard_event_loop(void)
 {
     serial_write("MICHAEL_OC_KEYBOARD_EVENT_LOOP_OK\r\n");
 
     for (;;) {
+        mouse_event_t mouse_event;
+        if (mouse_try_get_event(&mouse_event)) {
+            ui_handle_mouse_event(&mouse_event);
+            render_active_screen();
+            mono_flush_framebuffer();
+            continue;
+        }
+
         u8 scancode;
         if (keyboard_try_read_scancode(&scancode)) {
             const enum ui_screen previous_screen = active_screen;
