@@ -45,3 +45,12 @@ The test builds the ISO, verifies the Multiboot header, boots QEMU with an IDE d
 ## Planned development sequence
 
 Next milestones are PIC setup and hardware IRQ handlers, interrupt-driven keyboard input, paging and virtual memory, mouse support, persistent storage and a filesystem, a stable application ABI and loader, and working built-in applications. Features must be labelled as verified, partial, or not implemented rather than represented by demo-only placeholders.
+
+
+## On-disk MOCApp scripts
+
+The file manager executes files ending in `.mapp` as MOCApp scripts; other files open in the text editor. Create a text file with that suffix, enter instructions, press F2 to save, return to the file manager, and press Enter on the script. A fresh QEMU disk includes `welcome.mapp` as an example.
+
+Instructions are one per line: `PRINT text`, `CLEAR`, `WAITKEY`, `IFKEY a 6` (branch to zero-based source line 6 when the last printable key was `a`), `JUMP 4`, `SET 10`, `ADD 2`, `SUB 1`, `PRINTNUM`, `LS`, `READ filename.txt`, `WRITE filename.txt some text`, and `EXIT`. Blank and `#` comment lines are ignored but still count toward source-line indices.
+
+Programs are limited to 16 KiB and 256 source lines. This is a genuine disk-loaded scripting runtime, not native machine code: scripts execute in kernel context without process isolation or security boundaries. F1 stops a running script; Escape returns to the file manager.
