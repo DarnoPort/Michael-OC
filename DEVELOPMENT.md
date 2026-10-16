@@ -49,6 +49,7 @@
 - src/multiboot.h — shared Multiboot info and memory-map structures.
 - src/memory.h and src/memory.c — physical frame allocator and allocator self-test.
 - src/interrupts.h, src/interrupts.c and src/interrupts.S — IDT gates, exception stubs and fatal serial diagnostics.
+- src/interrupts.h, src/interrupts.c and src/interrupts.S — IDT gates, exception stubs and fatal serial diagnostics.
 - src/kernel.c — serial diagnostics, one-bit canvas, monochrome UI pages, keyboard state handler and polled PS/2 input.
 - linker.ld — kernel image layout and exported kernel bounds.
 - grub/grub.cfg — video mode, serial diagnostics and boot entry.

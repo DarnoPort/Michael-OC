@@ -12,6 +12,8 @@ Michael OC is an independent operating-system project targeting QEMU on Ubuntu L
 - Multiboot memory-map parser and physical page allocator for fully usable RAM pages below 4 GiB.
 - Boot-time allocator self-test checks page alignment, read/write access, free-page accounting and double-free rejection.
 - Reserved low memory, kernel image, Multiboot data structures, boot modules, and framebuffer pages.
+- Protected-mode IDT with exception gates for CPU vectors 0–31, selecting the active Multiboot code segment rather than assuming a fixed GDT selector.
+- Fatal exception diagnostics report the exception vector, error code, instruction pointer, code segment and flags to the serial port, then halt the CPU.
 - Protected-mode IDT with exception gates for CPU vectors 0–31. Boot tests verify that the IDT is loaded and its limit/base can be read back.
 - Fatal exception diagnostics report the exception vector, error code, instruction pointer, code segment and flags to the serial port, then halt the CPU.
 

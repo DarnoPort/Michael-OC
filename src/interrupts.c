@@ -115,7 +115,7 @@ void interrupts_init(void)
     __asm__ volatile ("mov %%cs, %0" : "=r"(code_selector));
     serial_write("MICHAEL_OC_IDT_CS=");
     serial_write_hex((u32)code_selector);
-    serial_write("\\r\\n");
+    serial_write("\r\n");
 
     for (u32 vector = 0u; vector < IDT_ENTRIES; ++vector) {
         const u32 handler = isr_stub_table[vector];
