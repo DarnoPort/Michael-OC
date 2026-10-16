@@ -834,6 +834,8 @@ static void mocapp_execute(void)
             char *name = argument;
             char *content = name;
             while (*content != '\0' && *content != ' ' && *content != '\t') ++content;
+            char *content_separator = content;
+            const char content_separator_character = *content;
             if (*content != '\0') *content++ = '\0';
             content = mocapp_skip_spaces(content);
             u16 index = 0u;
@@ -846,6 +848,8 @@ static void mocapp_execute(void)
             } else {
                 mocapp_print_line("WRITE OK");
             }
+            if (content_separator_character != '\0')
+                *content_separator = content_separator_character;
             ++mocapp_pc;
         } else if (mocapp_token_equal(line, "EXIT")) {
             mocapp_close("APP FINISHED");
