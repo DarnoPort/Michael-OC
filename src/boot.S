@@ -3,10 +3,23 @@
 .long 0x1BADB002
 .long 0x00000004
 .long -(0x1BADB002 + 0x00000004)
+
+/*
+ * Multiboot v1 keeps graphics fields at byte offset 32. The five words
+ * below occupy the reserved/address-field slots at offsets 12..28; because
+ * flag 16 is clear, GRUB does not interpret them as load addresses.
+ */
 .long 0
-.long 800
-.long 600
-.long 32
+.long 0
+.long 0
+.long 0
+.long 0
+
+/* Prefer linear graphics, but accept whatever resolution/depth is available. */
+.long 0
+.long 0
+.long 0
+.long 0
 
 .section .bss
 .align 16
