@@ -18,6 +18,10 @@
 
 #define COM1 0x3F8u
 
+#define UI_LOG_LINES 64u
+#define UI_LOG_WIDTH 100u
+#define UI_CONSOLE_VISIBLE_LINES 17u
+
 #define MONO_WIDTH 800u
 #define MONO_HEIGHT 600u
 #define MONO_BUFFER_BYTES ((MONO_WIDTH * MONO_HEIGHT + 7u) / 8u)
@@ -41,10 +45,16 @@ enum ui_screen {
     UI_SCREEN_FRAMEBUFFER,
     UI_SCREEN_FILES,
     UI_SCREEN_EDITOR,
-    UI_SCREEN_APP
+    UI_SCREEN_APP,
+    UI_SCREEN_CONSOLE
 };
 static enum ui_screen active_screen = UI_SCREEN_HOME;
 static u8 last_key_scancode;
+static char ui_log_lines[UI_LOG_LINES][UI_LOG_WIDTH];
+static u32 ui_log_next;
+static u32 ui_log_count = 1u;
+static u32 ui_log_column;
+static u32 ui_console_scroll;
 static u32 ui_mouse_x = MONO_WIDTH / 2u;
 static u32 ui_mouse_y = MONO_HEIGHT / 2u;
 static u8 ui_mouse_buttons;
@@ -166,9 +176,32 @@ static void serial_putc(char ch)
     }
 }
 
+static void ui_log_capture_char(char ch)
+{
+    if (ch == '\r') return;
+
+    u32 slot = ui_log_next;
+    if (ch == '\n') {
+        ui_log_lines[slot][ui_log_column] = '\0';
+        ui_log_next = (ui_log_next + 1u) % UI_LOG_LINES;
+        ui_log_lines[ui_log_next][0] = '\0';
+        ui_log_column = 0u;
+        if (ui_log_count < UI_LOG_LINES) ++ui_log_count;
+        ui_console_scroll = 0u;
+        return;
+    }
+
+    if ((u8)ch < 32u || (u8)ch > 126u) ch = '?';
+    if (ui_log_column + 1u < UI_LOG_WIDTH) {
+        ui_log_lines[slot][ui_log_column++] = ch;
+        ui_log_lines[slot][ui_log_column] = '\0';
+    }
+}
+
 static void serial_write(const char *text)
 {
     while (*text != '\0') {
+        ui_log_capture_char(*text);
         serial_putc(*text);
         ++text;
     }
@@ -449,6 +482,7 @@ static void draw_home_screen(void)
     mono_draw_text(80u, 264u, "3 DISPLAY TEST", 2u, 0);
     mono_draw_text(405u, 188u, "4 FILE MANAGER", 2u, 0);
     mono_draw_text(405u, 226u, "5 TEXT EDITOR", 2u, 0);
+    mono_draw_text(405u, 264u, "6 DEBUG CONSOLE", 2u, 0);
     mono_fill_rect(80u, 315u, 640u, 2u, 1);
     mono_draw_text(80u, 345u, "PRESS A NUMBER TO LAUNCH AN APP", 1u, 0);
     mono_draw_text(80u, 370u, "USE ESC TO RETURN HOME", 1u, 0);
@@ -1115,6 +1149,27 @@ static void draw_text_editor(void)
     }
 }
 
+static void draw_debug_console(void)
+{
+    draw_window_frame("DEBUG CONSOLE");
+    mono_draw_text(80u, 118u, "KERNEL SERIAL LOG  UP OLDER  DOWN NEWER", 1u, 0);
+
+    u32 scroll_limit = ui_log_count > UI_CONSOLE_VISIBLE_LINES ?
+                       ui_log_count - UI_CONSOLE_VISIBLE_LINES : 0u;
+    if (ui_console_scroll > scroll_limit) ui_console_scroll = scroll_limit;
+
+    for (u32 row = 0u; row < UI_CONSOLE_VISIBLE_LINES; ++row) {
+        const u32 age = ui_console_scroll + (UI_CONSOLE_VISIBLE_LINES - 1u - row);
+        if (age >= ui_log_count) continue;
+        const u32 newest = (ui_log_next + UI_LOG_LINES - 1u) % UI_LOG_LINES;
+        const u32 index = (newest + UI_LOG_LINES - age) % UI_LOG_LINES;
+        mono_draw_text(80u, 140u + row * 20u, ui_log_lines[index], 1u, 0);
+    }
+
+    mono_draw_text(80u, 486u, "R RETURN TO LATEST LOGS", 1u, 0);
+    mono_draw_text(80u, 506u, "ESC HOME", 1u, 0);
+}
+
 static void draw_mouse_cursor(void)
 {
     if (!mouse_is_available()) return;
@@ -1141,6 +1196,7 @@ static void render_active_screen(void)
     case UI_SCREEN_FILES: draw_file_manager(); break;
     case UI_SCREEN_EDITOR: draw_text_editor(); break;
     case UI_SCREEN_APP: draw_mocapp_screen(); break;
+    case UI_SCREEN_CONSOLE: draw_debug_console(); break;
     case UI_SCREEN_HOME:
     default: draw_home_screen(); break;
     }
@@ -1477,6 +1533,23 @@ static int handle_ui_scancode(u8 scancode)
         return 1;
     }
 
+    if (active_screen == UI_SCREEN_CONSOLE) {
+        if (scancode == 0x48u) {
+            if (ui_console_scroll < UI_LOG_LINES - UI_CONSOLE_VISIBLE_LINES)
+                ++ui_console_scroll;
+            return 1;
+        }
+        if (scancode == 0x50u) {
+            if (ui_console_scroll > 0u) --ui_console_scroll;
+            return 1;
+        }
+        if (scancode == 0x13u) {
+            ui_console_scroll = 0u;
+            return 1;
+        }
+        return 0;
+    }
+
     if (active_screen == UI_SCREEN_HOME) {
         if (scancode == 0x02u) { active_screen = UI_SCREEN_SYSTEM; return 1; }
         if (scancode == 0x03u) { active_screen = UI_SCREEN_KEYBOARD; last_key_scancode = 0u; return 1; }
@@ -1491,6 +1564,11 @@ static int handle_ui_scancode(u8 scancode)
         }
         if (scancode == 0x06u) {
             (void)editor_open_welcome();
+            return 1;
+        }
+        if (scancode == 0x07u) {
+            ui_console_scroll = 0u;
+            active_screen = UI_SCREEN_CONSOLE;
             return 1;
         }
         return 0;
@@ -1698,6 +1776,7 @@ static void log_ui_screen_event(void)
     case UI_SCREEN_FILES: serial_write("MICHAEL_OC_UI_SCREEN=FILES\r\n"); break;
     case UI_SCREEN_EDITOR: serial_write("MICHAEL_OC_UI_SCREEN=EDITOR\r\n"); break;
     case UI_SCREEN_APP: serial_write("MICHAEL_OC_UI_SCREEN=APP\r\n"); break;
+    case UI_SCREEN_CONSOLE: serial_write("MICHAEL_OC_UI_SCREEN=CONSOLE\r\n"); break;
     case UI_SCREEN_HOME:
     default: serial_write("MICHAEL_OC_UI_SCREEN=HOME\r\n"); break;
     }
@@ -1718,6 +1797,8 @@ static void ui_mouse_click(u32 x, u32 y)
             (void)handle_ui_scancode(0x05u);
         } else if (x >= 395u && x <= 610u && y >= 215u && y <= 250u) {
             (void)handle_ui_scancode(0x06u);
+        } else if (x >= 395u && x <= 610u && y >= 252u && y <= 292u) {
+            (void)handle_ui_scancode(0x07u);
         }
         return;
     }

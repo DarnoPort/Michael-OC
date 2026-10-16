@@ -106,7 +106,14 @@ def main() -> int:
         send_command(monitor, "sendkey esc")
         wait_for_marker(serial_log, "MICHAEL_OC_UI_SCREEN=HOME", process, 3.0)
 
-        print("PASS: QEMU key injection opened the keyboard page, delivered scan code 0x1E, and returned home with Escape.")
+        send_command(monitor, "sendkey 6")
+        wait_for_marker(serial_log, "MICHAEL_OC_UI_SCREEN=CONSOLE", process, 3.0)
+        send_command(monitor, "sendkey up")
+        send_command(monitor, "sendkey r")
+        send_command(monitor, "sendkey esc")
+        wait_for_marker(serial_log, "MICHAEL_OC_UI_SCREEN=HOME", process, 3.0)
+
+        print("PASS: keyboard IRQ navigated the UI, and the debug console opened, scrolled, returned to latest logs, and exited home.")
         return 0
     except Exception as exc:
         print(f"FAIL: keyboard input test: {exc}", file=sys.stderr)

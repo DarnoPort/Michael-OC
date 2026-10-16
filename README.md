@@ -83,3 +83,7 @@ The guest initializes the PS/2 auxiliary device and IRQ12 when the emulated cont
 ## PIT timer
 
 The kernel programs PIT channel 0 for approximately 100 interrupts per second and counts IRQ0 ticks. The system status screen reports the tick-based uptime in whole seconds. This is a basic hardware clock source, not yet a preemptive scheduler: the kernel still uses a single event loop, and there is no process scheduling or sleep syscall.
+
+## Debug console
+
+Press `6` on the home screen to open the monochrome debug console. It displays the latest 64 lines captured from kernel-side serial diagnostics, with lines truncated to a fixed-width buffer to keep memory use bounded. Use Up to scroll toward older lines, Down to return toward newer lines, `R` to jump to the latest entries, and Escape to return home. This is an in-kernel log viewer, not an interactive shell or a replacement for the serial port. Kernel diagnostics written directly by the interrupt module's own UART routines are not part of this capture buffer.

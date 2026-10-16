@@ -102,3 +102,7 @@ Added a PS/2 auxiliary-port initialization sequence, IRQ12 packet handling, pack
 ## PIT timer (latest change pending CI)
 
 PIT channel 0 is configured for approximately 100 Hz. IRQ0 increments a monotonic 32-bit tick counter, the boot test requires both timer setup and observed runtime ticks, and the system status screen reports whole-second tick-based uptime. The PIC mask now enables IRQ0 alongside IRQ1 and, when available, the IRQ2 cascade for mouse IRQ12. This does not yet implement preemptive multitasking or blocking sleep primitives.
+
+## Kernel debug console (latest change pending CI)
+
+A bounded 64-line ring captures printable messages written by the kernel's `serial_write` path. The monochrome console renders 17 lines at a time and provides Up/Down scrolling, R to return to the latest logs, and Escape to return home. The home screen exposes it as shortcut 6 and it also supports mouse clicks on the menu entry. The keyboard integration test now opens the console, exercises scrolling/latest navigation, and exits. This is a view of kernel-side serial writes, not an interactive command shell; diagnostics emitted through the standalone serial routines in `interrupts.c` are not captured.

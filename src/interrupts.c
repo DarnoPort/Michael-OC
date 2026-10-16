@@ -2,9 +2,9 @@
  * Michael OC CPU exceptions, PIC routing and PS/2 keyboard IRQ handling.
  *
  * CPU exception vectors 0..31 and PIC IRQ vectors 32..47 have IDT gates.
- * IRQ1 is the only unmasked hardware interrupt at this milestone. The
- * keyboard IRQ queues scan codes; UI state and rendering remain in the
- * kernel event loop, not inside interrupt context.
+ * PIT IRQ0, keyboard IRQ1, and (when available) mouse IRQ12 are unmasked.
+ * Device handlers queue events or increment counters; UI state and rendering
+ * remain in the kernel event loop, not inside interrupt context.
  */
 #include "interrupts.h"
 
