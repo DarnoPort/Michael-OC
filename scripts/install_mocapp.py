@@ -210,8 +210,8 @@ def install(disk_path: Path, source_path: Path, name: str | None = None) -> None
     total_sectors, bitmap, directory, entries, bitmap_offset, directory_offset = validate_image(image)
 
     for entry in entries:
-        if entry["type"] == FS_ENTRY_FILE and entry["parent"] == FS_ROOT and entry["name"] == file_name:
-            raise ValueError(f"root file already exists: {file_name}")
+        if entry["type"] != 0 and entry["parent"] == FS_ROOT and entry["name"] == file_name:
+            raise ValueError(f"root entry already exists: {file_name}")
 
     free_index = next(
         (index for index, entry in enumerate(entries) if entry["type"] == 0),

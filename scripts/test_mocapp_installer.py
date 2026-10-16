@@ -74,6 +74,33 @@ def main() -> int:
         if disk.read_bytes() != before:
             raise AssertionError("failed duplicate installation modified the image")
 
+        # A same-name directory is just as invalid as a same-name file.
+        directory_image = root / "directory-collision.img"
+        create_image(directory_image)
+        image_bytes = bytearray(directory_image.read_bytes())
+        header = struct.unpack_from(SUPER_FMT, image_bytes, 0)
+        directory_offset = header[5] * SECTOR_SIZE
+        directory_count = header[8]
+        free_slot = None
+        for entry_index in range(directory_count):
+            values = struct.unpack_from(ENTRY_FMT, image_bytes, directory_offset + entry_index * ENTRY_SIZE)
+            if values[2] == 0:
+                free_slot = entry_index
+                break
+        if free_slot is None:
+            raise AssertionError("seed disk unexpectedly has no free directory entry")
+        struct.pack_into(
+            ENTRY_FMT, image_bytes, directory_offset + free_slot * ENTRY_SIZE,
+            b"external.mapp\x00".ljust(32, b"\x00"), FS_ROOT, 2, 0, 0, 0, 0, bytes(18),
+        )
+        directory_image.write_bytes(image_bytes)
+        directory_before = directory_image.read_bytes()
+        collision = run_cli(source, directory_image, source)
+        if collision.returncode == 0:
+            raise AssertionError("file install colliding with a directory unexpectedly succeeded")
+        if directory_image.read_bytes() != directory_before:
+            raise AssertionError("directory-name collision modified the image")
+
         oversized = root / "oversized.mapp"
         oversized.write_bytes(b"X" * (16 * 1024 + 1))
         too_large = run_cli(oversized, disk, oversized)
