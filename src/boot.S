@@ -1,8 +1,12 @@
 .section .multiboot,"a"
 .align 4
 .long 0x1BADB002
-.long 0x00000000
-.long -(0x1BADB002 + 0x00000000)
+.long 0x00000004
+.long -(0x1BADB002 + 0x00000004)
+.long 0
+.long 800
+.long 600
+.long 32
 
 .section .bss
 .align 16
