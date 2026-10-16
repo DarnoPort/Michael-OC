@@ -40,8 +40,10 @@
 | PIT timer | Implemented, smoke-tested | PIT channel 0 runs at approximately 100 Hz; IRQ0 increments a monotonic tick count; CI requires a marker emitted after at least three ticks |
 | 32-bit paging | Implemented, runtime self-tested | 4 GiB identity map with 4 KiB PTEs; null page absent; test changes a virtual page from one PMM frame to another, checks data, unmaps it, then restores identity mapping. No per-process isolation yet |
 | Paging / virtual memory | Basic paging implemented; per-process virtual memory not implemented | Static 4 KiB page tables map 4 GiB identity-wise; null page is absent; map/query/unmap APIs pass a PMM frame-aliasing self-test. Page tables are part of kernel BSS and reserved by the PMM. Dynamic page-table allocation and process isolation remain unfinished |
+| ATA PIO block device | Implemented, runtime-tested | Probes primary IDE master with IDENTIFY; reads and writes LBA28 sectors; self-test writes, reads, verifies and restores reserved sector 63. Flush commands are selected from advertised IDENTIFY capabilities and exposed as an explicit operation |
+| MOCFS v1 filesystem | Implemented, cross-boot QEMU test | Persistent superblock, allocation bitmap, 128 inodes, nested directories, create/remove/list/exists/read/write; per-file limit 6 KiB. CI creates a nested file, boots another guest on the same image, verifies bytes and directory, then cleans up |
+| Filesystem durability limitations | Partial | No journal, crash recovery, permission model, rename/copy/truncate API or GUI front end yet; directories/files have 12 direct sectors at most |
 | Mouse input | Not implemented | No mouse packet decoder or pointer yet |
-| Persistent disk/filesystem | Not implemented | No block driver, filesystem or persistent user files yet |
 | Userspace and system-call API | Not implemented | The UI currently runs in kernel context |
 | External app loading/install/remove | Not implemented | No executable loader, app ABI or package format yet |
 | File manager/editor/monitor/installer apps | Not implemented | These depend on persistent storage and a stable application interface |
@@ -53,10 +55,12 @@
 - src/memory.h and src/memory.c — physical frame allocator and allocator self-test.
 - src/interrupts.h, src/interrupts.c and src/interrupts.S — IDT gates, exception stubs, PIC remapping/EOI, keyboard IRQ queue and PIT tick counter.
 - src/paging.h and src/paging.c — identity page tables, page map/query/unmap functions and a physical-frame aliasing self-test.
+- src/ata.h and src/ata.c — ATA PIO driver, disk IDENTIFY, LBA28 read/write, advertised cache-flush support and a nondestructive sector 63 self-test.
+- src/fs.h and src/fs.c — MOCFS v1 persistent filesystem and path traversal/CRUD primitives.
 - src/kernel.c — serial diagnostics, one-bit canvas, monochrome UI pages, keyboard state handler and IRQ-queued PS/2 input.
 - linker.ld — kernel image layout and exported kernel bounds.
 - grub/grub.cfg — video mode, serial diagnostics and boot entry.
-- Makefile — kernel/ISO build, tool checks, run and test targets.
+- Makefile — kernel/ISO build, disk image creation, kernel/ISO build, tool checks, run and test targets; `make test` includes cross-boot filesystem persistence verification.
 - scripts/test_keyboard_input.py — QEMU HMP key-injection test.
 - .github/workflows/build.yml — Ubuntu CI build, QEMU test and ISO artifact upload.
 - README.md — setup, build, run, controls and known limitations.
@@ -79,17 +83,17 @@ ISO output: build/michael-oc.iso.
 
 ## Latest verified milestone
 
-GitHub Actions run [38904714276](https://github.com/DarnoPort/Michael-OC/actions/runs/38904714276) passed for commit 08ec5e72f63273c8f0f446b29c4f6214ce248d83. CI built the ISO, enabled paging before PMM initialization, booted QEMU through the paging self-test and UI startup, injected keyboard events, and passed the separate INT3 exception-report test. The paging test confirms that a virtual alias can map two distinct physical allocator frames and then be unmapped. The address space is still shared and identity-mapped; this does not establish userspace isolation.
+GitHub Actions run [38907396073](https://github.com/DarnoPort/Michael-OC/actions/runs/38907396073) passed for commit `685fd9e297edd5cba62e1451bf23a3b3acaa97d9`. The workflow built the normal ISO, ran headless QEMU checks for IDT, page allocator, one-bit graphics, PIC/PIT and ATA/MOCFS startup, injected keyboard input via QEMU HMP, and passed the separate INT3 fault test. Most importantly, the persistence test wrote a file inside a nested directory, stopped the writer VM, booted a second kernel with the same 32 MiB disk, verified the file bytes and directory entry, then removed both objects. This verifies persistence across guest shutdown/restart for this test case; it does not demonstrate power-loss recovery or crash consistency.
 
-The physical allocator remains a pre-paging allocator: it tracks RAM below 4 GiB in a bitmap in kernel BSS and assumes a single-core boot environment. Its self-test accesses the allocated physical address directly because paging is not enabled.
+The physical page allocator tracks usable RAM below 4 GiB with bitmaps in kernel BSS and assumes a single-core kernel. Paging currently keeps physical memory directly accessible through a shared identity map; kernel frames and page-table memory are not isolated into per-process spaces.
 
 ## Next tasks
 
-1. Add a QEMU block device and persistent filesystem; test create/write/read/delete and data survival across a VM restart.
-2. Replace the all-identity static mapping with dynamic page-table allocation and separate virtual address spaces when the process model is designed.
-3. Define a kernel-to-app ABI and a genuine executable loader; implement install/remove after storage and executable validation work.
-4. Define a kernel-to-app ABI, an executable format/loader and a safe external-app installation/removal mechanism.
-5. Implement real file manager, editor, system monitor and installer applications using that interface.
+1. Add rename/copy/truncate primitives and additional MOCFS corruption/invalid-path tests; design a filesystem consistency strategy before claiming crash safety.
+2. Implement a monochrome file manager and text editor that use the MOCFS API, with UI tests and actual save/reopen checks.
+3. Replace the shared identity map with dynamic page-table allocation and separate address spaces as the process model is introduced.
+4. Define a kernel-to-app ABI and loadable executable format, then make install/remove operate on validated files on the persistent disk.
+5. Implement a system monitor, application installer and diagnostic console as real UI applications, not screens hard-coded into the kernel.
 6. Add mouse support and evolve the current full-screen diagnostic UI into a proper desktop/window manager.
 
 ## Verification rules
