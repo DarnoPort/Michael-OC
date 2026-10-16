@@ -38,10 +38,18 @@ _start:
     xor %ebp, %ebp
 
     /*
-     * Multiboot v1 enters with EAX=magic and EBX=info pointer.
-     * Keep 16-byte call-site alignment for the compiled C kernel.
-     * C uses cdecl: push arguments right-to-left.
+     * Install the exception IDT before entering C kernel code. Preserve both
+     * Multiboot arguments on the stack because the initializer may clobber
+     * caller-saved registers. IF remains disabled until hardware IRQs exist.
      */
+    push %eax
+    push %ebx
+    call interrupts_init
+    mov 4(%esp), %eax
+    mov (%esp), %ebx
+    add $8, %esp
+
+    /* C uses cdecl: push arguments right-to-left (info, then magic). */
     push %ebx
     push %eax
     call kernel_main

@@ -11,7 +11,7 @@ BUILD_DIR := build
 ISO_DIR := $(BUILD_DIR)/iso
 KERNEL := $(BUILD_DIR)/kernel.elf
 ISO := $(BUILD_DIR)/michael-oc.iso
-OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/memory.o
+OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/interrupts.o
 
 CFLAGS := -m32 -std=gnu11 -O2 -Wall -Wextra -Werror \
 	-ffreestanding -fno-builtin -fno-pie -fno-pic \
@@ -40,6 +40,11 @@ $(BUILD_DIR)/kernel.o: src/kernel.c src/multiboot.h src/memory.h | $(BUILD_DIR)
 $(BUILD_DIR)/memory.o: src/memory.c src/memory.h src/multiboot.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/interrupts.o: src/interrupts.S src/interrupts.c src/interrupts.h src/multiboot.h | $(BUILD_DIR)
+	$(CC) $(ASFLAGS) -c src/interrupts.S -o $(BUILD_DIR)/interrupts_stubs.o
+	$(CC) $(CFLAGS) -c src/interrupts.c -o $(BUILD_DIR)/interrupts_handler.o
+	$(LD) -m elf_i386 -r -o $@ $(BUILD_DIR)/interrupts_stubs.o $(BUILD_DIR)/interrupts_handler.o
+
 $(KERNEL): $(OBJECTS) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(OBJECTS)
 	$(GRUB_FILE) --is-x86-multiboot $@
@@ -67,10 +72,10 @@ test: $(ISO)
 	@rm -f $(BUILD_DIR)/serial.log
 	@set +e; $(TIMEOUT) 5s $(QEMU) -m 128M -cdrom $(ISO) -display none -monitor none -serial file:$(BUILD_DIR)/serial.log -no-reboot -no-shutdown; rc=$$?; set -e; \
 	if [ "$$rc" -ne 0 ] && [ "$$rc" -ne 124 ]; then echo "FAIL: QEMU exited with status $$rc"; cat $(BUILD_DIR)/serial.log 2>/dev/null || true; exit "$$rc"; fi; \
-	for marker in MICHAEL_OC_BOOT_OK MICHAEL_OC_PMM_OK MICHAEL_OC_MONO_TEST_OK MICHAEL_OC_INPUT_TEST_OK MICHAEL_OC_FB_OK MICHAEL_OC_KEYBOARD_POLL_OK; do \
+	for marker in MICHAEL_OC_BOOT_OK MICHAEL_OC_IDT_OK MICHAEL_OC_PMM_OK MICHAEL_OC_MONO_TEST_OK MICHAEL_OC_INPUT_TEST_OK MICHAEL_OC_FB_OK MICHAEL_OC_KEYBOARD_POLL_OK; do \
 		if ! grep -q "$$marker" $(BUILD_DIR)/serial.log; then echo "FAIL: missing $$marker"; cat $(BUILD_DIR)/serial.log 2>/dev/null || true; exit 1; fi; \
 	done; \
-	echo "PASS: kernel boot, 1-bit canvas, UI input logic, framebuffer output, and keyboard polling startup."
+	echo "PASS: kernel boot, IDT setup, physical-memory allocator, 1-bit canvas, UI input logic, framebuffer output, and keyboard polling startup."
 
 	python3 scripts/test_keyboard_input.py --qemu $(QEMU) --iso $(ISO) --work-dir $(BUILD_DIR)
 
