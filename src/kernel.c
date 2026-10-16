@@ -9,6 +9,7 @@
 #include "multiboot.h"
 #include "memory.h"
 #include "interrupts.h"
+#include "fs.h"
 
 #define VGA_WIDTH  80u
 #define VGA_HEIGHT 25u
@@ -390,7 +391,7 @@ static void draw_home_screen(void)
     mono_fill_rect(80u, 370u, 640u, 2u, 1);
     mono_draw_text(80u, 405u, "PRESS 1 2 OR 3 TO OPEN A SCREEN", 1u, 0);
     mono_draw_text(80u, 430u, "USE ESC TO RETURN HOME", 1u, 0);
-    mono_draw_text(80u, 485u, "NO FILESYSTEM OR USER APPS YET", 1u, 0);
+    mono_draw_text(80u, 485u, fs_is_mounted() ? "STORAGE: PERSISTENT FS READY" : "NO VIRTUAL DISK DETECTED", 1u, 0);
 }
 
 static void draw_system_screen(void)
@@ -412,6 +413,7 @@ static void draw_system_screen(void)
     mono_draw_text(80u, 418u, "INPUT: PS/2 IRQ1", 2u, 0);
     mono_draw_text(80u, 454u, pmm_is_initialized() ? "PMM: READY" : "PMM: NOT READY", 2u, 0);
     mono_draw_text(80u, 490u, "FREE PAGES:", 1u, 0);
+    mono_draw_text(80u, 515u, fs_is_mounted() ? "FS: MOCFS1 READY" : "FS: UNAVAILABLE", 1u, 0);
     mono_draw_uint(170u, 490u, pmm_free_page_count(), 1u);
 }
 
@@ -708,7 +710,7 @@ static void log_ui_screen_event(void)
 
 static void keyboard_event_loop(void)
 {
-    serial_write("MICHAEL_OC_KEYBOARD_POLL_OK\r\n");
+    serial_write("MICHAEL_OC_KEYBOARD_EVENT_LOOP_OK\r\n");
 
     for (;;) {
         u8 scancode;
@@ -745,6 +747,93 @@ static void show_vga_fallback(void)
     vga_write_at(15u, 2u, "MICHAEL_OC_FB_UNAVAILABLE", 0x0Fu);
 }
 
+
+static u32 kernel_text_length(const char *text)
+{
+    u32 size = 0u;
+    while (text[size] != '\0') ++size;
+    return size;
+}
+static int kernel_bytes_equal(const u8 *left, const u8 *right, u32 size)
+{
+    for (u32 i = 0u; i < size; ++i)
+        if (left[i] != right[i]) return 0;
+    return 1;
+}
+static void storage_test_fail(const char *reason) __attribute__((noreturn));
+static void storage_test_fail(const char *reason)
+{
+    serial_write("MICHAEL_OC_STORAGE_TEST_FAIL=");
+    serial_write(reason);
+    serial_write("\r\n");
+    halt_forever();
+}
+static void storage_self_test(void) __attribute__((noreturn));
+static void storage_self_test(void)
+{
+    static const u8 persistent_payload[] =
+        "Michael OC disk persistence survives a cold QEMU restart.";
+    static const u8 crud_payload[] = "file read/write/rename/delete";
+    u8 verify[128];
+    u32 size = 0u;
+    u16 file_index = 0u;
+
+    if (!fs_mount()) storage_test_fail("MOUNT");
+    serial_write("MICHAEL_OC_STORAGE_FS_OK\r\n");
+
+    const u32 payload_size = (u32)sizeof(persistent_payload);
+    if (!fs_lookup(FS_ROOT, "ci-persist.txt", &file_index)) {
+        if (!fs_create_file(FS_ROOT, "ci-persist.txt", &file_index))
+            storage_test_fail("CREATE_PERSISTENT_FILE");
+        if (!fs_write_file(file_index, persistent_payload, payload_size))
+            storage_test_fail("WRITE_PERSISTENT_FILE");
+        if (!fs_read_file(file_index, verify, sizeof(verify), &size) ||
+            size != payload_size ||
+            !kernel_bytes_equal(verify, persistent_payload, payload_size))
+            storage_test_fail("READ_AFTER_WRITE");
+        serial_write("MICHAEL_OC_STORAGE_PHASE=WRITE\r\n");
+        halt_forever();
+    }
+
+    if (!fs_read_file(file_index, verify, sizeof(verify), &size) ||
+        size != payload_size ||
+        !kernel_bytes_equal(verify, persistent_payload, payload_size))
+        storage_test_fail("PERSISTENCE_VERIFY");
+    serial_write("MICHAEL_OC_STORAGE_PHASE=VERIFY\r\n");
+
+    u16 folder_index = 0u;
+    u16 nested_index = 0u;
+    if (!fs_make_directory(FS_ROOT, "ci-folder", &folder_index))
+        storage_test_fail("MKDIR");
+    if (!fs_create_file(folder_index, "inside.txt", &nested_index))
+        storage_test_fail("CREATE_NESTED_FILE");
+    if (!fs_write_file(nested_index, crud_payload, (u32)sizeof(crud_payload)))
+        storage_test_fail("WRITE_NESTED_FILE");
+
+    fs_entry_t entries[4];
+    u32 entry_count = 0u;
+    if (!fs_list(folder_index, entries, 4u, &entry_count) ||
+        entry_count != 1u || entries[0].type != FS_ENTRY_FILE)
+        storage_test_fail("LIST_DIRECTORY");
+    if (!fs_rename(nested_index, "renamed.txt"))
+        storage_test_fail("RENAME_FILE");
+    u16 renamed_index = 0u;
+    if (fs_lookup(folder_index, "inside.txt", &renamed_index) ||
+        !fs_lookup(folder_index, "renamed.txt", &renamed_index) ||
+        renamed_index != nested_index)
+        storage_test_fail("LOOKUP_AFTER_RENAME");
+    if (!fs_read_file(renamed_index, verify, sizeof(verify), &size) ||
+        size != sizeof(crud_payload) ||
+        !kernel_bytes_equal(verify, crud_payload, (u32)sizeof(crud_payload)))
+        storage_test_fail("READ_RENAMED_FILE");
+    if (!fs_delete(renamed_index) || fs_lookup(folder_index, "renamed.txt", &renamed_index))
+        storage_test_fail("DELETE_FILE");
+    if (!fs_delete(folder_index)) storage_test_fail("DELETE_EMPTY_DIRECTORY");
+
+    serial_write("MICHAEL_OC_STORAGE_CRUD_OK\r\n");
+    halt_forever();
+}
+
 void kernel_main(u32 multiboot_magic, u32 multiboot_info)
 {
     serial_init();
@@ -765,6 +854,15 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
         serial_write("MICHAEL_OC_PMM_OK\r\n");
     } else {
         serial_write("MICHAEL_OC_PMM_FAIL\r\n");
+    }
+
+#ifdef MICHAEL_OC_STORAGE_SELF_TEST
+    storage_self_test();
+#endif
+    if (fs_mount()) {
+        serial_write("MICHAEL_OC_FS_OK\r\n");
+    } else {
+        serial_write("MICHAEL_OC_FS_UNAVAILABLE\r\n");
     }
 
     if (!initialize_graphics(multiboot_info)) {

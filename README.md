@@ -10,6 +10,8 @@ Michael OC is an independent operating-system project targeting QEMU on Ubuntu L
 - 800x600 packed one-bit software canvas and monochrome framebuffer renderer.
 - Keyboard-driven diagnostic UI: home, system status, keyboard test and framebuffer test.
 - Interrupt-driven PS/2 keyboard input (PIC IRQ1) with an end-to-end QEMU key-injection test.
+- ATA PIO access to a QEMU IDE disk and Michael OC FS v1 with nested directories, file read/write, rename and delete.
+- Two-cold-boot QEMU test for persistent file contents and filesystem CRUD.
 - IDT entries for CPU exception vectors 0–31, serial fatal-exception reporting, and a dedicated QEMU `INT3` dispatch test.
 - Multiboot memory-map parser and physical page allocator for fully usable RAM pages below 4 GiB.
 - Boot-time allocator self-test that allocates a page, checks page alignment, writes and reads a test value, frees the page, checks the free-page count, and rejects double-free.
@@ -31,13 +33,13 @@ From the repository root:
     make
     make run
 
-The bootable ISO is generated at build/michael-oc.iso. In QEMU, press 1 for system status, 2 for the keyboard test, 3 for the framebuffer test, or Escape to return home. On the keyboard-test screen, press keys to see their make scancodes. Keyboard data is delivered by PIC IRQ1 into a small single-producer/single-consumer queue.
+The bootable ISO is generated at build/michael-oc.iso. The first `make run` also creates a 16 MiB persistent disk at `build/michael-oc-disk.img`; keep that file to preserve user data. In QEMU, press 1 for system status, 2 for the keyboard test, 3 for the framebuffer test, or Escape to return home. On the keyboard-test screen, press keys to see their make scancodes. Keyboard data is delivered by PIC IRQ1 into a small single-producer/single-consumer queue.
 
 Run automated tests:
 
     make test
 
-The test builds the ISO, verifies the Multiboot header, boots QEMU, and requires serial markers for kernel entry, IDT setup, keyboard IRQ1 setup, physical-memory manager self-test, one-bit canvas self-test, UI input-state self-test and framebuffer flush. It then starts QEMU with its HMP monitor and injects key 2, A and Escape. A second, separately compiled diagnostic kernel executes `INT3`; the test checks the exception vector and synthetic error-code reporting.
+The test builds the ISO, verifies the Multiboot header, boots QEMU with an IDE disk, and requires serial markers for kernel entry, IDT setup, filesystem mount, keyboard IRQ1 setup, physical-memory manager self-test, one-bit canvas self-test, UI input-state self-test and framebuffer flush. It then starts QEMU with its HMP monitor and injects key 2, A and Escape. A second, separately compiled diagnostic kernel executes `INT3`; the test checks the exception vector and synthetic error-code reporting.
 
 ## Planned development sequence
 

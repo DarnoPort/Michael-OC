@@ -37,7 +37,9 @@
 | Paging / virtual memory | Not implemented | The current allocator returns physical addresses and runs before paging |
 | Mouse input | Not implemented | No mouse packet decoder or pointer yet |
 | CPU exception and PIC/IRQ framework | Implemented, QEMU-tested | IDT gates for CPU vectors 0–31 and PIC vectors 32–47; IRQ1 enabled and queue-backed. Timer, mouse and other device IRQ drivers are not implemented |
-| Persistent disk/filesystem | Not implemented | No block driver, filesystem or persistent user files yet |
+| ATA PIO and persistent filesystem | Implemented; QEMU runtime test pending | New ATA driver, MOCFS1 API, and two-boot persistence test; update status when CI passes |
+| ATA PIO block driver | Implemented; QEMU-tested by storage CI | IDENTIFY plus bounded LBA28 sector reads/writes and cache flush for primary-master IDE |
+| Michael OC FS v1 | Implemented; two-cold-boot QEMU test added | Persistent bitmap, 64-entry hierarchical directory table, create/list/rename/delete, contiguous file read/write; non-journaled custom format |
 | Userspace and system-call API | Not implemented | The UI currently runs in kernel context |
 | External app loading/install/remove | Not implemented | No executable loader, app ABI or package format yet |
 | File manager/editor/monitor/installer apps | Not implemented | These depend on persistent storage and a stable application interface |
@@ -47,6 +49,8 @@
 - src/boot.S — Multiboot header, stack, owned flat GDT, and C entry transfer.
 - src/multiboot.h — shared Multiboot info and memory-map structures.
 - src/memory.h and src/memory.c — physical frame allocator and allocator self-test.
+- src/disk.h and src/disk.c — primary-master ATA PIO sector I/O.
+- src/fs.h and src/fs.c — MOCFS1 mount, directory operations, and file read/write.
 - src/kernel.c — serial diagnostics, one-bit canvas, monochrome UI pages, keyboard state handler and polled PS/2 input.
 - src/interrupts.h and src/interrupts.c — IDT setup, descriptor-register verification, PIC remapping, PS/2 IRQ1 handling and a scan-code queue.
 - src/isr_stubs.S — CPU exception stubs, PIC IRQ stubs, and common assembly dispatch paths.
@@ -54,6 +58,8 @@
 - grub/grub.cfg — video mode, serial diagnostics and boot entry.
 - Makefile — kernel/ISO build, run, tool checks, keyboard test, and a separate QEMU exception-dispatch test kernel.
 - scripts/test_keyboard_input.py — QEMU HMP key-injection test.
+- scripts/create_disk_image.py — creates a blank formatted MOCFS1 disk image.
+- scripts/test_storage.py — writes in one QEMU process, verifies in another, and checks filesystem CRUD.
 - .github/workflows/build.yml — Ubuntu CI build, QEMU test and ISO artifact upload.
 - README.md — setup, build, run, controls and known limitations.
 
@@ -81,10 +87,11 @@ The allocator is intentionally only a physical frame allocator at this stage. Pa
 
 ## Next tasks
 
-1. Add paging and virtual memory with tests for mapping, unmapping and reserved-region protection.
-2. Add a persistent block-device/filesystem layer and verify file contents survive QEMU restarts.
-3. Define a userspace ABI and executable loader, then implement installable applications on top of it.
-4. Add timer and mouse drivers; only then consider a window manager.
+1. Run the new ATA/FS two-cold-boot CI test and fix any driver or metadata issue it reveals.
+2. Add a file-manager and text-editor screen on top of MOCFS1.
+3. Add paging and virtual memory with tests for mapping, unmapping and reserved-region protection.
+4. Define a userspace ABI and executable loader, then implement installable applications on top of it.
+5. Add timer and mouse drivers; only then consider a window manager.
 4. Add a block device and persistent filesystem in a QEMU disk image; test that data survives restarts.
 5. Define a stable kernel-to-app interface, executable format/loader, and application installation/removal.
 6. Implement file manager, editor, system monitor and installer as real, independently launchable applications.
