@@ -125,6 +125,7 @@ static void serial_write_hex(u32 value)
     }
 }
 
+static void halt_forever(void) __attribute__((noreturn));
 static void halt_forever(void)
 {
     for (;;) {
