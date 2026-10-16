@@ -52,3 +52,12 @@ Branch targets use zero-based source lines. Blank and comment lines count as sou
 LS, READ, and WRITE act in the file manager's current directory. Files are stored on the persistent QEMU disk. WRITE replaces the contents of an existing file. MOCFS1 currently uses a fixed-size directory table and contiguous extents without a journal, so sudden shutdowns during metadata changes can leave the filesystem inconsistent.
 
 The fresh-disk image created by scripts/create_disk_image.py contains welcome.mapp as an integration-test example. Deleting the disk image and creating a new one resets persistent data.
+
+## Installing a script created on the host
+
+Quit QEMU before modifying the disk image. From the repository root, run:
+
+    python3 scripts/install_mocapp.py --disk build/michael-oc-disk.img --source ./hello.mapp
+    make run
+
+The script is added to the guest filesystem root and can then be selected and run in the guest file manager. The disk installer validates the MOCFS1 superblock, metadata layout, directory entries, sector bitmap, existing file extents, script encoding, extension, and size/line caps. Duplicate names are rejected. Updates are written to a temporary disk image and atomically renamed into place, so a reported failure leaves the original disk image unchanged. Keep QEMU shut down while the host tool edits its disk file.

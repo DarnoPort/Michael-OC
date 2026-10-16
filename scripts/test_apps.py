@@ -37,6 +37,21 @@ def wait_marker(log: Path, marker: str, process: subprocess.Popen, timeout: floa
     contents = log.read_text(errors="replace") if log.exists() else ""
     raise TimeoutError(f"timed out waiting for {marker}\n{contents}")
 
+def wait_marker_count(log: Path, marker: str, expected: int, process: subprocess.Popen,
+                      timeout: float = 5.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            contents = log.read_text(errors="replace") if log.exists() else ""
+            raise RuntimeError(f"QEMU exited before {marker} occurred {expected} times\n{contents}")
+        contents = log.read_text(errors="replace") if log.exists() else ""
+        if contents.count(marker) >= expected:
+            return
+        time.sleep(0.05)
+    contents = log.read_text(errors="replace") if log.exists() else ""
+    raise TimeoutError(f"timed out waiting for {marker} occurrence {expected}\n{contents}")
+
+
 def stop_qemu(process: subprocess.Popen, monitor: socket.socket | None) -> None:
     if monitor is not None:
         monitor.close()
@@ -95,6 +110,13 @@ def main() -> int:
     args = parser.parse_args()
     args.work_dir.mkdir(parents=True, exist_ok=True)
     subprocess.run([sys.executable, str(args.create_disk_script), "--output", str(args.disk)], check=True)
+    host_app = args.work_dir / "host-installed.mapp"
+    host_app.write_text("PRINT HOST INSTALL WORKS\nEXIT\n", encoding="ascii")
+    subprocess.run(
+        [sys.executable, str(Path(__file__).with_name("install_mocapp.py")),
+         "--disk", str(args.disk), "--source", str(host_app)],
+        check=True,
+    )
 
     log = args.work_dir / "serial-apps.log"
     monitor_path = args.work_dir / "qemu-apps-monitor.sock"
@@ -133,6 +155,16 @@ def main() -> int:
         wait_marker(log, "MICHAEL_OC_APP_PRINT=KEY RECEIVED", process)
         wait_marker(log, "MICHAEL_OC_APP_EXIT", process)
         wait_marker(log, "MICHAEL_OC_UI_SCREEN=FILES", process)
+
+        # The second root-level app was installed into the disk image on the host,
+        # after the ISO was built. Launching it proves no kernel rebuild is needed.
+        send_key(monitor, "down")
+        send_key(monitor, "ret")
+        wait_marker(log, "MICHAEL_OC_APP_STARTED=host-installed.mapp", process)
+        wait_marker(log, "MICHAEL_OC_APP_PRINT=HOST INSTALL WORKS", process)
+        wait_marker_count(log, "MICHAEL_OC_APP_EXIT", 2, process)
+
+        # The file manager's next entry is the document created during boot one.
         send_key(monitor, "down")
         send_key(monitor, "ret")
         wait_marker(log, "MICHAEL_OC_UI_SCREEN=EDITOR", process)

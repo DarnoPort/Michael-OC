@@ -31,7 +31,7 @@ ASFLAGS := -m32 -ffreestanding -fno-pie -fno-pic \
 	-fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables
 LDFLAGS := -m elf_i386 -T linker.ld -nostdlib
 
-.PHONY: all kernel iso run test test-exception test-storage test-apps clean check-tools
+.PHONY: all kernel iso run test test-exception test-storage test-apps test-mocapp-installer clean check-tools
 
 all: check-tools iso
 
@@ -170,6 +170,7 @@ test: $(ISO) $(DISK_IMAGE)
 	$(MAKE) test-exception
 	$(MAKE) test-storage
 	$(MAKE) test-apps
+	$(MAKE) test-mocapp-installer
 
 test-exception: $(EXCEPTION_TEST_ISO)
 	@command -v $(QEMU) >/dev/null || { echo "Missing $(QEMU); install qemu-system-x86"; exit 1; }
@@ -183,6 +184,9 @@ test-storage: $(STORAGE_TEST_ISO)
 test-apps: $(ISO)
 	@command -v $(QEMU) >/dev/null || { echo "Missing $(QEMU); install qemu-system-x86"; exit 1; }
 	python3 scripts/test_apps.py --qemu $(QEMU) --iso $(ISO) --disk $(STORAGE_TEST_DIR)/ui-test-disk.img --work-dir $(STORAGE_TEST_DIR) --create-disk-script scripts/create_disk_image.py
+
+test-mocapp-installer:
+	python3 scripts/test_mocapp_installer.py
 
 clean:
 	rm -rf $(BUILD_DIR)

@@ -82,3 +82,7 @@ Workflow run [38911241812](https://github.com/DarnoPort/Michael-OC/actions/runs/
 ## Verification policy
 
 A source file or successful compile is not proof of runtime correctness. Track build, boot, keyboard input, exception dispatch, storage persistence, editor workflow, and script execution separately. Do not mark features verified until the relevant tests pass.
+
+## External MOCApp installation
+
+A host-side installer now places a .mapp source file into the root of an existing MOCFS1 disk image without rebuilding the kernel ISO. It validates filesystem geometry, metadata relationships, extents, file-name rules, and the interpreter's size/line constraints. The operation edits a temporary copy and replaces the image only after a complete successful write. A standalone test checks the on-disk entry/data, duplicate-name rejection, oversized-source rejection, and unchanged image bytes after rejected operations. The QEMU app workflow installs another app after the ISO has already been built and then launches it from the guest file manager. This milestone remains pending until the latest CI run passes.

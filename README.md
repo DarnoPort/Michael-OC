@@ -58,3 +58,12 @@ The automated suite compiles the kernel, verifies its Multiboot header, boots QE
 - The UI tools are kernel-resident screens rather than separate protected processes.
 
 Next priorities are tested paging and safe memory mappings, user-mode execution and a stable system-call ABI, filesystem consistency/recovery, and mouse/timer support. Only label a feature as verified when its corresponding test actually passes.
+
+## Installing an app created outside QEMU
+
+Shut down QEMU before changing its disk image. Then use the host-side installer to add an external script to the guest's root directory:
+
+    python3 scripts/install_mocapp.py --disk build/michael-oc-disk.img --source ./hello.mapp
+    make run
+
+The installer validates MOCFS1 metadata and script limits, rejects duplicate root names instead of overwriting files, and atomically replaces the image file after writing the script, bitmap, and directory entry. It changes the virtual disk only; the kernel and bootable ISO are not rebuilt. The tool supports this project's MOCFS1 disk-image format, not arbitrary FAT/NTFS disks.
