@@ -557,6 +557,7 @@ int fs_list(const char *path, fs_dir_entry_t *entries,
                 bytes_zero(&entries[total], sizeof(entries[total]));
                 bytes_copy(entries[total].name, disk_entries[e].name,
                            sizeof(disk_entries[e].name));
+                entries[total].name[FS_NAME_MAX] = '\0';
                 entries[total].type = inode_table[child].type;
                 entries[total].size = inode_table[child].size;
             }

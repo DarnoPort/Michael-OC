@@ -770,6 +770,16 @@ static int persistence_bytes_equal(const u8 *a, const u8 *b, u32 size)
     }
     return 1;
 }
+
+static int persistence_string_equal(const char *a, const char *b)
+{
+    u32 i = 0u;
+    while (a[i] != '\0' && b[i] != '\0') {
+        if (a[i] != b[i]) return 0;
+        ++i;
+    }
+    return a[i] == '\0' && b[i] == '\0';
+}
 #endif
 
 void kernel_main(u32 multiboot_magic, u32 multiboot_info)
@@ -851,7 +861,7 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
                  persistence_bytes_equal(payload, verify, (u32)sizeof(payload)) &&
                  fs_list("/.ci-fs-test", entries, 4u, &entry_count) &&
                  entry_count == 1u &&
-                 string_equals(entries[0].name, "persist.bin") &&
+                 persistence_string_equal(entries[0].name, "persist.bin") &&
                  entries[0].type == FS_TYPE_FILE;
         if (ok) serial_write("MICHAEL_OC_FS_PERSIST_WRITE_OK\r\n");
         else serial_write("MICHAEL_OC_FS_PERSIST_WRITE_FAILED\r\n");
