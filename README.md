@@ -9,13 +9,13 @@ Michael OC is an independent operating-system project targeting QEMU on Ubuntu L
 - Reproducible ISO build and automated QEMU tests.
 - 800x600 packed one-bit software canvas and monochrome framebuffer renderer.
 - Keyboard-driven diagnostic UI: home, system status, keyboard test and framebuffer test.
-- PS/2 keyboard polling with an end-to-end QEMU key-injection test.
+- Interrupt-driven PS/2 keyboard input (PIC IRQ1) with an end-to-end QEMU key-injection test.
 - IDT entries for CPU exception vectors 0–31, serial fatal-exception reporting, and a dedicated QEMU `INT3` dispatch test.
 - Multiboot memory-map parser and physical page allocator for fully usable RAM pages below 4 GiB.
 - Boot-time allocator self-test that allocates a page, checks page alignment, writes and reads a test value, frees the page, checks the free-page count, and rejects double-free.
 - Reserved low memory, kernel image, Multiboot data structures, boot modules, and framebuffer pages.
 
-**This is still early OS development, not a completed general-purpose operating system.** The UI currently runs in kernel context. The allocator is physical-only; paging/virtual memory, hardware IRQ routing and interrupt-driven keyboard input, mouse input, persistent filesystem, userspace, a general executable loader, app installation, and the requested built-in applications remain unfinished. CPU exceptions 0–31 have IDT gates and a fatal serial diagnostic path.
+**This is still early OS development, not a completed general-purpose operating system.** The UI currently runs in kernel context. CPU exceptions 0–31 and PIC vectors 32–47 have IDT gates; the PIC is remapped and only keyboard IRQ1 is unmasked. Keyboard scan codes are queued from interrupt context and consumed by the UI event loop. Paging/virtual memory, timer and mouse IRQ drivers, persistent filesystem, userspace, a general executable loader, app installation, and the requested built-in applications remain unfinished.
 
 The system-status page shows the allocator readiness and current count of free physical pages after a successful initialization.
 
@@ -31,13 +31,13 @@ From the repository root:
     make
     make run
 
-The bootable ISO is generated at build/michael-oc.iso. In QEMU, press 1 for system status, 2 for the keyboard test, 3 for the framebuffer test, or Escape to return home. On the keyboard-test screen, press keys to see their make scancodes. Input is polled from the emulated PS/2 controller; this is not yet an interrupt-driven keyboard driver.
+The bootable ISO is generated at build/michael-oc.iso. In QEMU, press 1 for system status, 2 for the keyboard test, 3 for the framebuffer test, or Escape to return home. On the keyboard-test screen, press keys to see their make scancodes. Keyboard data is delivered by PIC IRQ1 into a small single-producer/single-consumer queue.
 
 Run automated tests:
 
     make test
 
-The test builds the ISO, verifies the Multiboot header, boots QEMU, and requires serial markers for kernel entry, IDT setup, physical-memory manager self-test, one-bit canvas self-test, UI input-state self-test, framebuffer flush and keyboard polling. It then starts QEMU with its HMP monitor and injects key 2, A and Escape. A second, separately compiled diagnostic kernel executes `INT3`; the test checks the exception vector and synthetic error-code reporting.
+The test builds the ISO, verifies the Multiboot header, boots QEMU, and requires serial markers for kernel entry, IDT setup, keyboard IRQ1 setup, physical-memory manager self-test, one-bit canvas self-test, UI input-state self-test and framebuffer flush. It then starts QEMU with its HMP monitor and injects key 2, A and Escape. A second, separately compiled diagnostic kernel executes `INT3`; the test checks the exception vector and synthetic error-code reporting.
 
 ## Planned development sequence
 

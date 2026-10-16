@@ -409,7 +409,7 @@ static void draw_system_screen(void)
 
     mono_draw_text(80u, 322u, "CANVAS: 1 BIT / PIXEL", 2u, 0);
     mono_draw_text(80u, 370u, "DISPLAY: BLACK / WHITE", 2u, 0);
-    mono_draw_text(80u, 418u, "INPUT: PS/2 POLLING", 2u, 0);
+    mono_draw_text(80u, 418u, "INPUT: PS/2 IRQ1", 2u, 0);
     mono_draw_text(80u, 454u, pmm_is_initialized() ? "PMM: READY" : "PMM: NOT READY", 2u, 0);
     mono_draw_text(80u, 490u, "FREE PAGES:", 1u, 0);
     mono_draw_uint(170u, 490u, pmm_free_page_count(), 1u);
@@ -684,15 +684,7 @@ static int initialize_graphics(u32 multiboot_info_address)
 
 static int keyboard_try_read_scancode(u8 *scancode)
 {
-    const u8 status = inb(0x64u);
-
-    /* Output-buffer-full must be set; ignore auxiliary (mouse) bytes. */
-    if ((status & 0x01u) == 0u || (status & 0x20u) != 0u) {
-        return 0;
-    }
-
-    *scancode = inb(0x60u);
-    return 1;
+    return keyboard_try_get_scancode(scancode);
 }
 
 static void log_ui_screen_event(void)
@@ -714,7 +706,7 @@ static void log_ui_screen_event(void)
     }
 }
 
-static void keyboard_poll_loop(void)
+static void keyboard_event_loop(void)
 {
     serial_write("MICHAEL_OC_KEYBOARD_POLL_OK\r\n");
 
@@ -786,5 +778,6 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
     __asm__ volatile ("int $3");
     serial_write("MICHAEL_OC_EXCEPTION_TEST_FAILED\r\n");
 #endif
-    keyboard_poll_loop();
+    interrupts_enable();
+    keyboard_event_loop();
 }

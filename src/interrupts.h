@@ -1,10 +1,17 @@
 #ifndef MICHAEL_OC_INTERRUPTS_H
 #define MICHAEL_OC_INTERRUPTS_H
 
-void interrupts_init(void);
+#include "multiboot.h"
 
-/* Called only by the assembly exception entry stubs. Never returns. */
-void interrupt_exception_handler(unsigned int vector, unsigned int error_code)
+void interrupts_init(void);
+void interrupts_enable(void);
+
+/* Non-blocking read from the IRQ1 producer / kernel-loop consumer queue. */
+int keyboard_try_get_scancode(u8 *scancode);
+
+/* Called by assembly exception/IRQ entry stubs. */
+void interrupt_exception_handler(u32 vector, u32 error_code)
     __attribute__((noreturn));
+void interrupt_irq_handler(u32 irq_number);
 
 #endif

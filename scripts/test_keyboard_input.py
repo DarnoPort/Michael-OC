@@ -82,7 +82,7 @@ def main() -> int:
     process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     monitor = None
     try:
-        wait_for_marker(serial_log, "MICHAEL_OC_KEYBOARD_POLL_OK", process, 10.0)
+        wait_for_marker(serial_log, "MICHAEL_OC_KEYBOARD_IRQ_OK", process, 10.0)
 
         deadline = time.monotonic() + 5.0
         while not monitor_path.exists() and time.monotonic() < deadline:
