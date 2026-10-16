@@ -23,6 +23,7 @@
 | Multiboot v1 header | Implemented, smoke-tested | grub-file check passes |
 | Reproducible bootable ISO | Implemented, smoke-tested | make builds build/michael-oc.iso in CI |
 | Kernel linker layout | Implemented, smoke-tested | Separate RX and RW PT_LOAD segments |
+| Bootstrap GDT | Implemented, QEMU-tested | Loads an owned flat code/data GDT before IDT use; exception-dispatch test verifies the code selector works |
 | Serial diagnostics | Implemented, smoke-tested | COM1 output is used by automated tests and diagnosis |
 | Packed one-bit canvas | Implemented, smoke-tested | 800x600 canvas, one bit per pixel; set/clear self-test required by CI |
 | Monochrome framebuffer rendering | Implemented, smoke-tested | GRUB mode 800x600x32; only black and full RGB white are emitted |
@@ -35,7 +36,7 @@
 | Physical-memory allocator self-test | Implemented, smoke-tested | Allocates one page, checks alignment/count, writes and reads a value, frees and checks count restoration and double-free rejection |
 | Paging / virtual memory | Not implemented | The current allocator returns physical addresses and runs before paging |
 | Mouse input | Not implemented | No mouse packet decoder or pointer yet |
-| CPU exception IDT and fatal handler | Implemented; runtime test pending | Gates for vectors 0–31; separate test kernel triggers `INT3` and checks vector/error-code output. Hardware IRQ routing and recovery are not implemented |
+| CPU exception IDT and fatal handler | Implemented, QEMU-tested | Gates for vectors 0–31; separate test kernel triggers `INT3` and checks vector/error-code output. Hardware IRQ routing and recovery are not implemented |
 | Persistent disk/filesystem | Not implemented | No block driver, filesystem or persistent user files yet |
 | Userspace and system-call API | Not implemented | The UI currently runs in kernel context |
 | External app loading/install/remove | Not implemented | No executable loader, app ABI or package format yet |
@@ -74,7 +75,7 @@ ISO output: build/michael-oc.iso.
 
 ## Latest verified milestone
 
-GitHub Actions run [38852152656](https://github.com/DarnoPort/Michael-OC/actions/runs/38852152656) passed at commit 5777a5aafa826e577fa01d1e5b25757706ba1fc4. The pipeline compiled the kernel and memory module, checked the Multiboot header, generated the ISO, booted QEMU, required the memory manager and monochrome UI self-test markers, passed the QEMU HMP key-injection test, and uploaded the ISO artifact.
+GitHub Actions run [38906829090](https://github.com/DarnoPort/Michael-OC/actions/runs/38906829090) passed at commit 81b57f0e4e6c41128d01e69ff810448ac78cf220. The pipeline compiled the normal kernel and the separate exception-test kernel, verified both Multiboot headers, booted the regular QEMU image, checked the allocator and monochrome UI self-test markers, passed the QEMU HMP keyboard-injection test, and passed the `INT3` exception-dispatch test. The exception test observed `MICHAEL_OC_EXCEPTION_VECTOR=0x00000003 ERROR=0x00000000` before the expected fatal halt.
 
 The allocator is intentionally only a physical frame allocator at this stage. Paging, virtual address spaces and concurrency protection are not implemented. It tracks RAM below 4 GiB using a bitmap in kernel BSS and assumes the current single-core, pre-paging boot environment. The page self-test uses direct physical addressing because paging is not enabled.
 
