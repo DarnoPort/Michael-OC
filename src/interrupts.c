@@ -294,5 +294,12 @@ void interrupt_exception_handler(u32 vector, u32 error_code)
     serial_write(" ERROR=");
     serial_write_hex(error_code);
     serial_write("\r\n");
+    if (vector == 14u) {
+        u32 fault_address = 0u;
+        __asm__ volatile ("mov %%cr2, %0" : "=r"(fault_address));
+        serial_write("MICHAEL_OC_PAGE_FAULT_CR2=");
+        serial_write_hex(fault_address);
+        serial_write("\r\n");
+    }
     halt_forever();
 }

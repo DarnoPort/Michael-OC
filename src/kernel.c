@@ -1858,6 +1858,15 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
     __asm__ volatile ("int $3");
     serial_write("MICHAEL_OC_EXCEPTION_TEST_FAILED\r\n");
 #endif
+#ifdef MICHAEL_OC_PAGE_FAULT_SELF_TEST
+    const u32 protected_target = (u32)&kernel_main;
+    serial_write("MICHAEL_OC_PROTECTED_WRITE_TARGET=");
+    serial_write_hex(protected_target);
+    serial_write("\r\nMICHAEL_OC_PAGE_FAULT_SELF_TEST_TRIGGER\r\n");
+    *(volatile u8 *)protected_target = 0x90u;
+    serial_write("MICHAEL_OC_PAGE_FAULT_TEST_FAILED\r\n");
+    halt_forever();
+#endif
     interrupts_enable();
     keyboard_event_loop();
 }

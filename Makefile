@@ -20,7 +20,11 @@ EXCEPTION_TEST_DIR := $(BUILD_DIR)/exception-test
 EXCEPTION_TEST_ISO_DIR := $(EXCEPTION_TEST_DIR)/iso
 EXCEPTION_TEST_KERNEL := $(EXCEPTION_TEST_DIR)/kernel.elf
 EXCEPTION_TEST_ISO := $(EXCEPTION_TEST_DIR)/michael-oc-exception-test.iso
+PAGE_FAULT_TEST_KERNEL := $(EXCEPTION_TEST_DIR)/page-fault-kernel.elf
+PAGE_FAULT_TEST_ISO_DIR := $(EXCEPTION_TEST_DIR)/page-fault-iso
+PAGE_FAULT_TEST_ISO := $(EXCEPTION_TEST_DIR)/michael-oc-page-fault-test.iso
 EXCEPTION_TEST_OBJECTS := $(EXCEPTION_TEST_DIR)/boot.o $(EXCEPTION_TEST_DIR)/kernel.o $(EXCEPTION_TEST_DIR)/memory.o $(EXCEPTION_TEST_DIR)/interrupts.o $(EXCEPTION_TEST_DIR)/isr_stubs.o $(EXCEPTION_TEST_DIR)/disk.o $(EXCEPTION_TEST_DIR)/fs.o $(EXCEPTION_TEST_DIR)/paging.o
+PAGE_FAULT_TEST_OBJECTS := $(EXCEPTION_TEST_DIR)/boot.o $(EXCEPTION_TEST_DIR)/page-fault-kernel.o $(EXCEPTION_TEST_DIR)/memory.o $(EXCEPTION_TEST_DIR)/interrupts.o $(EXCEPTION_TEST_DIR)/isr_stubs.o $(EXCEPTION_TEST_DIR)/disk.o $(EXCEPTION_TEST_DIR)/fs.o $(EXCEPTION_TEST_DIR)/paging.o
 STORAGE_TEST_OBJECTS := $(STORAGE_TEST_DIR)/boot.o $(STORAGE_TEST_DIR)/kernel.o $(STORAGE_TEST_DIR)/memory.o $(STORAGE_TEST_DIR)/interrupts.o $(STORAGE_TEST_DIR)/isr_stubs.o $(STORAGE_TEST_DIR)/disk.o $(STORAGE_TEST_DIR)/fs.o $(STORAGE_TEST_DIR)/paging.o
 OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/interrupts.o $(BUILD_DIR)/isr_stubs.o $(BUILD_DIR)/disk.o $(BUILD_DIR)/fs.o $(BUILD_DIR)/paging.o
 
@@ -31,7 +35,7 @@ ASFLAGS := -m32 -ffreestanding -fno-pie -fno-pic \
 	-fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables
 LDFLAGS := -m elf_i386 -T linker.ld -nostdlib
 
-.PHONY: all kernel iso run test test-exception test-storage test-apps test-mocapp-installer clean check-tools
+.PHONY: all kernel iso run test test-exception test-paging-fault test-storage test-apps test-mocapp-installer clean check-tools
 
 all: check-tools iso
 
@@ -65,6 +69,9 @@ $(EXCEPTION_TEST_DIR)/boot.o: src/boot.S | $(EXCEPTION_TEST_DIR)
 
 $(EXCEPTION_TEST_DIR)/kernel.o: src/kernel.c src/multiboot.h src/memory.h src/interrupts.h src/fs.h src/paging.h | $(EXCEPTION_TEST_DIR)
 	$(CC) $(CFLAGS) -DMICHAEL_OC_EXCEPTION_SELF_TEST -c $< -o $@
+
+$(EXCEPTION_TEST_DIR)/page-fault-kernel.o: src/kernel.c src/multiboot.h src/memory.h src/interrupts.h src/fs.h src/paging.h | $(EXCEPTION_TEST_DIR)
+	$(CC) $(CFLAGS) -DMICHAEL_OC_PAGE_FAULT_SELF_TEST -c $< -o $@
 
 $(EXCEPTION_TEST_DIR)/memory.o: src/memory.c src/memory.h src/multiboot.h | $(EXCEPTION_TEST_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -143,6 +150,16 @@ $(EXCEPTION_TEST_ISO): $(EXCEPTION_TEST_KERNEL) grub/grub.cfg
 	cp grub/grub.cfg $(EXCEPTION_TEST_ISO_DIR)/boot/grub/grub.cfg
 	$(GRUB_MKRESCUE) -o $@ $(EXCEPTION_TEST_ISO_DIR)
 
+$(PAGE_FAULT_TEST_KERNEL): $(PAGE_FAULT_TEST_OBJECTS) linker.ld
+	$(LD) $(LDFLAGS) -o $@ $(PAGE_FAULT_TEST_OBJECTS)
+	$(GRUB_FILE) --is-x86-multiboot $@
+
+$(PAGE_FAULT_TEST_ISO): $(PAGE_FAULT_TEST_KERNEL) grub/grub.cfg
+	mkdir -p $(PAGE_FAULT_TEST_ISO_DIR)/boot/grub
+	cp $(PAGE_FAULT_TEST_KERNEL) $(PAGE_FAULT_TEST_ISO_DIR)/boot/kernel.elf
+	cp grub/grub.cfg $(PAGE_FAULT_TEST_ISO_DIR)/boot/grub/grub.cfg
+	$(GRUB_MKRESCUE) -o $@ $(PAGE_FAULT_TEST_ISO_DIR)
+
 $(KERNEL): $(OBJECTS) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(OBJECTS)
 	$(GRUB_FILE) --is-x86-multiboot $@
@@ -177,6 +194,7 @@ test: $(ISO) $(DISK_IMAGE)
 
 	python3 scripts/test_keyboard_input.py --qemu $(QEMU) --iso $(ISO) --disk $(DISK_IMAGE) --work-dir $(BUILD_DIR)
 	$(MAKE) test-exception
+	$(MAKE) test-paging-fault
 	$(MAKE) test-storage
 	$(MAKE) test-apps
 	$(MAKE) test-mocapp-installer
@@ -185,6 +203,10 @@ test-exception: $(EXCEPTION_TEST_ISO)
 	@command -v $(QEMU) >/dev/null || { echo "Missing $(QEMU); install qemu-system-x86"; exit 1; }
 	@command -v $(TIMEOUT) >/dev/null || { echo "Missing timeout (GNU coreutils)"; exit 1; }
 	python3 scripts/test_exceptions.py --qemu $(QEMU) --iso $(EXCEPTION_TEST_ISO) --work-dir $(EXCEPTION_TEST_DIR)
+
+test-paging-fault: $(PAGE_FAULT_TEST_ISO)
+	@command -v $(QEMU) >/dev/null || { echo "Missing $(QEMU); install qemu-system-x86"; exit 1; }
+	python3 scripts/test_paging_fault.py --qemu $(QEMU) --iso $(PAGE_FAULT_TEST_ISO) --work-dir $(EXCEPTION_TEST_DIR)
 
 test-storage: $(STORAGE_TEST_ISO)
 	@command -v $(QEMU) >/dev/null || { echo "Missing $(QEMU); install qemu-system-x86"; exit 1; }
