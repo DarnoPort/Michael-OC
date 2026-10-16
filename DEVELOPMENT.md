@@ -98,3 +98,7 @@ A dedicated page-fault diagnostic kernel now attempts a write to a kernel text a
 ## Mouse input (latest change pending CI)
 
 Added a PS/2 auxiliary-port initialization sequence, IRQ12 packet handling, packet resynchronization, signed delta decoding, bounded event queue, monochrome cursor rendering, and click dispatch to the existing keyboard-driven UI actions. Mouse initialization is optional on a machine without an auxiliary device; in that case boot continues with keyboard input only. QEMU testing now verifies movement and a click that navigates from the home screen into the file manager. In this kernel-resident prototype, pointer events and click handling execute in ring 0, as does the rest of the UI.
+
+## PIT timer (latest change pending CI)
+
+PIT channel 0 is configured for approximately 100 Hz. IRQ0 increments a monotonic 32-bit tick counter, the boot test requires both timer setup and observed runtime ticks, and the system status screen reports whole-second tick-based uptime. The PIC mask now enables IRQ0 alongside IRQ1 and, when available, the IRQ2 cascade for mouse IRQ12. This does not yet implement preemptive multitasking or blocking sleep primitives.

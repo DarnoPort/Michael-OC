@@ -79,3 +79,7 @@ A separate QEMU test deliberately attempts to write to the kernel's protected te
 ## Mouse input
 
 The guest initializes the PS/2 auxiliary device and IRQ12 when the emulated controller supports it. The UI draws a black/white pointer directly into the one-bit canvas. Click the home-screen menu items to open screens; click a file-manager row to open it; use the footer/tool area for common file actions and editor cursor placement. Dialog text is still entered through the keyboard. The QEMU integration test injects movement and a left-click, adjusts for the observed mouse Y-axis convention, and verifies that clicking the desktop's File Manager item changes the active screen.
+
+## PIT timer
+
+The kernel programs PIT channel 0 for approximately 100 interrupts per second and counts IRQ0 ticks. The system status screen reports the tick-based uptime in whole seconds. This is a basic hardware clock source, not yet a preemptive scheduler: the kernel still uses a single event loop, and there is no process scheduling or sleep syscall.

@@ -19,6 +19,9 @@ typedef struct {
 int mouse_try_get_event(mouse_event_t *event);
 int mouse_is_available(void);
 
+/* PIT channel 0 runs at approximately 100 Hz when initialized successfully. */
+u32 timer_ticks(void);
+
 /* Called by assembly exception/IRQ entry stubs. */
 void interrupt_exception_handler(u32 vector, u32 error_code)
     __attribute__((noreturn));

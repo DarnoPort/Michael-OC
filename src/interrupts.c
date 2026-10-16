@@ -19,6 +19,11 @@
 #define PIC_SLAVE_DATA  0xA1u
 #define PIC_EOI         0x20u
 
+#define PIT_CHANNEL0    0x40u
+#define PIT_COMMAND     0x43u
+#define PIT_INPUT_HZ    1193182u
+#define PIT_TICK_HZ     100u
+
 #define PS2_STATUS      0x64u
 #define PS2_DATA        0x60u
 #define PS2_OUTPUT_FULL 0x01u
@@ -63,6 +68,7 @@ static volatile u32 mouse_queue_dropped;
 static volatile u8 mouse_packet[3];
 static volatile u8 mouse_packet_phase;
 static int mouse_available;
+static volatile u32 timer_tick_count;
 
 extern void (*isr_stub_table[IDT_EXCEPTION_COUNT])(void);
 extern void (*irq_stub_table[IDT_IRQ_COUNT])(void);
@@ -253,6 +259,20 @@ static int ps2_mouse_command(u8 command)
     return 0;
 }
 
+static void pit_initialize(void)
+{
+    const u16 divisor = (u16)(PIT_INPUT_HZ / PIT_TICK_HZ);
+    outb(PIT_COMMAND, 0x36u); /* Channel 0, low byte/high byte, square wave. */
+    outb(PIT_CHANNEL0, (u8)(divisor & 0xFFu));
+    outb(PIT_CHANNEL0, (u8)(divisor >> 8));
+    timer_tick_count = 0u;
+}
+
+u32 timer_ticks(void)
+{
+    return timer_tick_count;
+}
+
 static int ps2_enable_mouse_irq(void)
 {
     if (!ps2_wait_input_empty()) return 0;
@@ -308,16 +328,19 @@ void interrupts_init(void)
     }
 
     mouse_available = ps2_enable_mouse_irq();
+    pit_initialize();
     if (mouse_available) {
-        /* Unmask IRQ1, IRQ2 (cascade), and slave IRQ12 (PS/2 auxiliary). */
+        /* Unmask IRQ0 (PIT), IRQ1 (keyboard), IRQ2 (cascade), and IRQ12 (mouse). */
         outb(PIC_SLAVE_DATA, 0xEFu);
-        outb(PIC_MASTER_DATA, 0xF9u);
+        outb(PIC_MASTER_DATA, 0xF8u);
         serial_write("MICHAEL_OC_MOUSE_IRQ_OK\r\n");
     } else {
+        /* The timer and keyboard continue to work without the optional mouse. */
         outb(PIC_SLAVE_DATA, 0xFFu);
-        outb(PIC_MASTER_DATA, 0xFDu);
+        outb(PIC_MASTER_DATA, 0xFCu);
         serial_write("MICHAEL_OC_MOUSE_IRQ_UNAVAILABLE\r\n");
     }
+    serial_write("MICHAEL_OC_TIMER_IRQ_OK\r\n");
     serial_write("MICHAEL_OC_KEYBOARD_IRQ_OK\r\n");
 }
 
@@ -411,6 +434,10 @@ int mouse_try_get_event(mouse_event_t *event)
 
 void interrupt_irq_handler(u32 irq_number)
 {
+    if (irq_number == 0u) {
+        ++timer_tick_count;
+    }
+
     if (irq_number == 1u) {
         const u8 status = inb(PS2_STATUS);
         if ((status & PS2_OUTPUT_FULL) != 0u &&

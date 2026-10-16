@@ -81,6 +81,7 @@ static enum ui_screen editor_return_screen = UI_SCREEN_FILES;
 static char editor_filename[32];
 static int editor_dirty;
 static int editor_exit_confirm;
+static int timer_tick_marker_reported;
 
 #define MOCAPP_MAX_LINES 256u
 #define MOCAPP_OUTPUT_LINES 14u
@@ -472,6 +473,9 @@ static void draw_system_screen(void)
     mono_draw_text(80u, 370u, "DISPLAY: BLACK / WHITE", 2u, 0);
     mono_draw_text(80u, 418u, mouse_is_available() ? "INPUT: PS2 KEY/MOUSE" : "INPUT: PS/2 KEY ONLY", 2u, 0);
     mono_draw_text(80u, 454u, pmm_is_initialized() ? "PMM: READY" : "PMM: NOT READY", 2u, 0);
+    mono_draw_text(250u, 454u, "PIT: 100 HZ", 1u, 0);
+    mono_draw_text(80u, 475u, "UPTIME SEC:", 1u, 0);
+    mono_draw_uint(150u, 475u, timer_ticks() / PIT_TICK_HZ, 1u);
     mono_draw_text(80u, 490u, "FREE PAGES:", 1u, 0);
     mono_draw_text(80u, 515u, fs_is_mounted() ? "FS: MOCFS1 READY" : "FS: UNAVAILABLE", 1u, 0);
     mono_draw_uint(170u, 490u, pmm_free_page_count(), 1u);
@@ -1810,6 +1814,11 @@ static void keyboard_event_loop(void)
     serial_write("MICHAEL_OC_KEYBOARD_EVENT_LOOP_OK\r\n");
 
     for (;;) {
+        if (!timer_tick_marker_reported && timer_ticks() != 0u) {
+            timer_tick_marker_reported = 1;
+            serial_write("MICHAEL_OC_TIMER_TICK_OK\r\n");
+        }
+
         mouse_event_t mouse_event;
         if (mouse_try_get_event(&mouse_event)) {
             const enum ui_screen previous_screen = active_screen;
