@@ -21,6 +21,7 @@
 #define UI_LOG_LINES 64u
 #define UI_LOG_WIDTH 100u
 #define UI_CONSOLE_VISIBLE_LINES 17u
+#define UI_CONSOLE_COMMAND_CAPACITY 64u
 
 #define MONO_WIDTH 800u
 #define MONO_HEIGHT 600u
@@ -55,6 +56,9 @@ static u32 ui_log_next;
 static u32 ui_log_count = 1u;
 static u32 ui_log_column;
 static u32 ui_console_scroll;
+static char ui_console_command[UI_CONSOLE_COMMAND_CAPACITY];
+static u32 ui_console_command_length;
+static fs_entry_t ui_console_entries[FS_DIRECTORY_LIMIT];
 static u32 ui_mouse_x = MONO_WIDTH / 2u;
 static u32 ui_mouse_y = MONO_HEIGHT / 2u;
 static u8 ui_mouse_buttons;
@@ -212,7 +216,9 @@ static void serial_write_hex(u32 value)
     static const char digits[] = "0123456789ABCDEF";
     serial_write("0x");
     for (int shift = 28; shift >= 0; shift -= 4) {
-        serial_putc(digits[(value >> (u32)shift) & 0x0Fu]);
+        const char digit = digits[(value >> (u32)shift) & 0x0Fu];
+        ui_log_capture_char(digit);
+        serial_putc(digit);
     }
 }
 
@@ -1166,8 +1172,125 @@ static void draw_debug_console(void)
         mono_draw_text(80u, 140u + row * 20u, ui_log_lines[index], 1u, 0);
     }
 
-    mono_draw_text(80u, 486u, "R RETURN TO LATEST LOGS", 1u, 0);
-    mono_draw_text(80u, 506u, "ESC HOME", 1u, 0);
+    mono_draw_text(80u, 470u, ui_status_message, 1u, 0);
+    mono_draw_text(80u, 490u, "CMD>", 1u, 0);
+    mono_draw_text(110u, 490u, ui_console_command, 1u, 0);
+    mono_fill_rect(112u + ui_console_command_length * 6u, 499u, 5u, 1u, 1);
+    mono_draw_text(80u, 511u, "UP/DOWN SCROLL  END LATEST  ENTER RUN", 1u, 0);
+}
+
+
+static void ui_console_clear_log(void)
+{
+    for (u32 row = 0u; row < UI_LOG_LINES; ++row)
+        ui_log_lines[row][0] = '\0';
+    ui_log_next = 0u;
+    ui_log_count = 1u;
+    ui_log_column = 0u;
+    ui_console_scroll = 0u;
+}
+
+static void ui_console_execute_command(void)
+{
+    if (ui_console_command_length == 0u) return;
+
+    serial_write("MICHAEL_OC_CONSOLE_COMMAND=");
+    serial_write(ui_console_command);
+    serial_write("\r\n");
+
+    if (ui_text_equal(ui_console_command, "help")) {
+        serial_write("COMMANDS: help mem uptime fs input ls clear\r\n");
+        serial_write("MICHAEL_OC_CONSOLE_COMMANDS_OK\r\n");
+    } else if (ui_text_equal(ui_console_command, "mem")) {
+        serial_write("MICHAEL_OC_CONSOLE_MEMORY_STATUS=");
+        serial_write(pmm_is_initialized() ? "READY" : "UNAVAILABLE");
+        serial_write("\r\nFREE_PAGES=");
+        serial_write_hex(pmm_free_page_count());
+        serial_write("\r\nPAGING=");
+        serial_write(paging_is_enabled() ? "ON" : "OFF");
+        serial_write("\r\nMICHAEL_OC_CONSOLE_MEMORY_OK\r\n");
+    } else if (ui_text_equal(ui_console_command, "uptime")) {
+        serial_write("TIMER_TICKS=");
+        serial_write_hex(timer_ticks());
+        serial_write("\r\nUPTIME_SECONDS=");
+        serial_write_hex(timer_ticks() / 100u);
+        serial_write("\r\nMICHAEL_OC_CONSOLE_UPTIME_OK\r\n");
+    } else if (ui_text_equal(ui_console_command, "fs")) {
+        serial_write("MICHAEL_OC_CONSOLE_FS_STATUS=");
+        serial_write(fs_is_mounted() ? "MOUNTED" : "UNAVAILABLE");
+        serial_write("\r\nFREE_SECTORS=");
+        serial_write_hex(fs_free_sectors());
+        serial_write("\r\nMICHAEL_OC_CONSOLE_FS_OK\r\n");
+    } else if (ui_text_equal(ui_console_command, "input")) {
+        serial_write("KEYBOARD_IRQ=ACTIVE\r\nMOUSE_IRQ=");
+        serial_write(mouse_is_available() ? "ACTIVE" : "UNAVAILABLE");
+        serial_write("\r\nTIMER_TICKS=");
+        serial_write_hex(timer_ticks());
+        serial_write("\r\nMICHAEL_OC_CONSOLE_INPUT_OK\r\n");
+    } else if (ui_text_equal(ui_console_command, "ls")) {
+        u32 count = 0u;
+        if (!fs_is_mounted() ||
+            !fs_list(ui_current_directory(), ui_console_entries,
+                     FS_DIRECTORY_LIMIT, &count)) {
+            serial_write("DIRECTORY_LIST=FAILED\r\n");
+            serial_write("MICHAEL_OC_CONSOLE_LS_FAILED\r\n");
+        } else {
+            serial_write("MICHAEL_OC_CONSOLE_LS_BEGIN\r\n");
+            for (u32 i = 0u; i < count; ++i) {
+                serial_write(ui_console_entries[i].type == FS_ENTRY_DIRECTORY ?
+                             "DIR " : "FILE ");
+                serial_write(ui_console_entries[i].name);
+                serial_write("\r\n");
+            }
+            serial_write("MICHAEL_OC_CONSOLE_LS_COUNT=");
+            serial_write_hex(count);
+            serial_write("\r\nMICHAEL_OC_CONSOLE_LS_OK\r\n");
+        }
+    } else if (ui_text_equal(ui_console_command, "clear")) {
+        ui_console_clear_log();
+        ui_set_message("LOG HISTORY CLEARED");
+    } else {
+        serial_write("UNKNOWN COMMAND\r\nTYPE HELP FOR COMMANDS\r\n");
+        serial_write("MICHAEL_OC_CONSOLE_UNKNOWN_COMMAND\r\n");
+    }
+
+    ui_console_command_length = 0u;
+    ui_console_command[0] = '\0';
+    ui_console_scroll = 0u;
+}
+
+static int ui_console_handle_scancode(u8 scancode)
+{
+    if (scancode == 0x48u) {
+        if (ui_console_scroll < UI_LOG_LINES - UI_CONSOLE_VISIBLE_LINES)
+            ++ui_console_scroll;
+        return 1;
+    }
+    if (scancode == 0x50u) {
+        if (ui_console_scroll > 0u) --ui_console_scroll;
+        return 1;
+    }
+    if (scancode == 0x4Fu) {
+        ui_console_scroll = 0u;
+        return 1;
+    }
+    if (scancode == 0x1Cu) {
+        ui_console_execute_command();
+        return 1;
+    }
+    if (scancode == 0x0Eu) {
+        if (ui_console_command_length > 0u)
+            ui_console_command[--ui_console_command_length] = '\0';
+        return 1;
+    }
+
+    const char ch = ui_scancode_to_ascii(scancode);
+    if (ch != '\0' && ui_console_command_length + 1u < UI_CONSOLE_COMMAND_CAPACITY) {
+        ui_console_command[ui_console_command_length++] = ch;
+        ui_console_command[ui_console_command_length] = '\0';
+        return 1;
+    }
+    return 0;
 }
 
 static void draw_mouse_cursor(void)
@@ -1533,22 +1656,8 @@ static int handle_ui_scancode(u8 scancode)
         return 1;
     }
 
-    if (active_screen == UI_SCREEN_CONSOLE) {
-        if (scancode == 0x48u) {
-            if (ui_console_scroll < UI_LOG_LINES - UI_CONSOLE_VISIBLE_LINES)
-                ++ui_console_scroll;
-            return 1;
-        }
-        if (scancode == 0x50u) {
-            if (ui_console_scroll > 0u) --ui_console_scroll;
-            return 1;
-        }
-        if (scancode == 0x13u) {
-            ui_console_scroll = 0u;
-            return 1;
-        }
-        return 0;
-    }
+    if (active_screen == UI_SCREEN_CONSOLE)
+        return ui_console_handle_scancode(scancode);
 
     if (active_screen == UI_SCREEN_HOME) {
         if (scancode == 0x02u) { active_screen = UI_SCREEN_SYSTEM; return 1; }

@@ -87,3 +87,5 @@ The kernel programs PIT channel 0 for approximately 100 interrupts per second an
 ## Debug console
 
 Press `6` on the home screen to open the monochrome debug console. It displays the latest 64 lines captured from kernel-side serial diagnostics, with lines truncated to a fixed-width buffer to keep memory use bounded. Use Up to scroll toward older lines, Down to return toward newer lines, `R` to jump to the latest entries, and Escape to return home. This is an in-kernel log viewer, not an interactive shell or a replacement for the serial port. Kernel diagnostics written directly by the interrupt module's own UART routines are not part of this capture buffer.
+
+The debug console also accepts simple diagnostic commands in its prompt. Type `help` to list them, `mem` for allocator/page-protection status, `uptime` for PIT ticks and elapsed seconds, `fs` for filesystem mount/free-sector status, `input` for keyboard/mouse/timer status, `ls` to list the current file-manager directory, and `clear` to clear the in-memory log history. Enter runs a command and Backspace edits the prompt. This is still an in-kernel diagnostic command interpreter, not a general-purpose shell.

@@ -110,3 +110,5 @@ A bounded 64-line ring captures printable messages written by the kernel's `seri
 ## Debug console (verified in QEMU)
 
 The latest CI test opened the console from home with key 6, sent Up to exercise older-log scrolling, used R to return to the latest entries, and pressed Escape to return home. It uses a 64-line ring of kernel `serial_write` messages with a 17-line one-bit display window. The current console is a log viewer, not an interactive shell.
+
+The console now accepts `help`, `mem`, `uptime`, `fs`, `input`, `ls`, and `clear`; command output is appended to the kernel log ring and therefore remains scrollable. It reads the actual page allocator, paging state, PIT counter, filesystem status/free-sector count, current directory, and device initialization status. The QEMU keyboard test executes help, memory, filesystem, and uptime commands and checks explicit result markers.

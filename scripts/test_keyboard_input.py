@@ -108,12 +108,40 @@ def main() -> int:
 
         send_command(monitor, "sendkey 6")
         wait_for_marker(serial_log, "MICHAEL_OC_UI_SCREEN=CONSOLE", process, 3.0)
+        send_command(monitor, "sendkey h")
+        send_command(monitor, "sendkey e")
+        send_command(monitor, "sendkey l")
+        send_command(monitor, "sendkey p")
+        send_command(monitor, "sendkey ret")
+        wait_for_marker(serial_log, "MICHAEL_OC_CONSOLE_COMMAND=help", process, 3.0)
+        wait_for_marker(serial_log, "MICHAEL_OC_CONSOLE_COMMANDS_OK", process, 3.0)
+
+        send_command(monitor, "sendkey m")
+        send_command(monitor, "sendkey e")
+        send_command(monitor, "sendkey m")
+        send_command(monitor, "sendkey ret")
+        wait_for_marker(serial_log, "MICHAEL_OC_CONSOLE_MEMORY_OK", process, 3.0)
+
+        send_command(monitor, "sendkey f")
+        send_command(monitor, "sendkey s")
+        send_command(monitor, "sendkey ret")
+        wait_for_marker(serial_log, "MICHAEL_OC_CONSOLE_FS_OK", process, 3.0)
+
+        send_command(monitor, "sendkey u")
+        send_command(monitor, "sendkey p")
+        send_command(monitor, "sendkey t")
+        send_command(monitor, "sendkey i")
+        send_command(monitor, "sendkey m")
+        send_command(monitor, "sendkey e")
+        send_command(monitor, "sendkey ret")
+        wait_for_marker(serial_log, "MICHAEL_OC_CONSOLE_UPTIME_OK", process, 3.0)
+
         send_command(monitor, "sendkey up")
-        send_command(monitor, "sendkey r")
+        send_command(monitor, "sendkey end")
         send_command(monitor, "sendkey esc")
         wait_for_marker(serial_log, "MICHAEL_OC_UI_SCREEN=HOME", process, 3.0)
 
-        print("PASS: keyboard IRQ navigated the UI, and the debug console opened, scrolled, returned to latest logs, and exited home.")
+        print("PASS: keyboard IRQ navigated the UI, executed console help/mem/fs/uptime commands, scrolled history, and exited home.")
         return 0
     except Exception as exc:
         print(f"FAIL: keyboard input test: {exc}", file=sys.stderr)
