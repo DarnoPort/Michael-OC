@@ -66,6 +66,23 @@ static u8 mono_buffer[MONO_BUFFER_BYTES];
 static u32 canvas_width;
 static u32 canvas_height;
 
+static volatile u8 *active_framebuffer;
+static u32 active_framebuffer_pitch;
+static u32 active_bytes_per_pixel;
+static u32 active_white_pixel;
+static u32 active_fb_width;
+static u32 active_fb_height;
+static u32 active_fb_bpp;
+
+enum ui_screen {
+    UI_SCREEN_HOME = 0,
+    UI_SCREEN_SYSTEM,
+    UI_SCREEN_KEYBOARD,
+    UI_SCREEN_FRAMEBUFFER
+};
+static enum ui_screen active_screen = UI_SCREEN_HOME;
+static u8 last_key_scancode;
+
 static u32 vga_index(u32 row, u32 col)
 {
     return row * VGA_WIDTH + col;
@@ -349,30 +366,210 @@ static int mono_buffer_self_test(void)
     return 1;
 }
 
-static void draw_monochrome_boot_screen(void)
+static void mono_draw_uint(u32 x, u32 y, u32 value, u32 scale)
+{
+    char digits[10];
+    u32 count = 0u;
+
+    do {
+        digits[count++] = (char)('0' + (value % 10u));
+        value /= 10u;
+    } while (value != 0u && count < (u32)sizeof(digits));
+
+    while (count > 0u) {
+        mono_draw_char(x, y, digits[--count], scale, 0);
+        x += 6u * scale;
+    }
+}
+
+static void mono_draw_hex_byte(u32 x, u32 y, u8 value, u32 scale)
+{
+    static const char digits[] = "0123456789ABCDEF";
+
+    mono_draw_char(x, y, '0', scale, 0);
+    mono_draw_char(x + 6u * scale, y, 'X', scale, 0);
+    mono_draw_char(x + 12u * scale, y, digits[(value >> 4) & 0x0Fu], scale, 0);
+    mono_draw_char(x + 18u * scale, y, digits[value & 0x0Fu], scale, 0);
+}
+
+static void mono_flush_framebuffer(void)
+{
+    if (active_framebuffer == 0 || active_bytes_per_pixel == 0u) {
+        return;
+    }
+
+    for (u32 y = 0; y < canvas_height; ++y) {
+        const u32 row_offset = y * active_framebuffer_pitch;
+        for (u32 x = 0; x < canvas_width; ++x) {
+            /* The one-bit software canvas emits only black or full RGB white. */
+            const u32 value = mono_get_pixel(x, y) != 0 ? active_white_pixel : 0u;
+            const u32 offset = row_offset + x * active_bytes_per_pixel;
+
+            for (u32 byte = 0; byte < active_bytes_per_pixel; ++byte) {
+                active_framebuffer[offset + byte] = (u8)(value >> (8u * byte));
+            }
+        }
+    }
+}
+
+static void draw_window_frame(const char *title)
 {
     mono_clear();
-
     mono_outline_rect(24u, 24u, 752u, 552u, 1);
-    mono_fill_rect(32u, 32u, 736u, 72u, 1);
-    mono_draw_text(72u, 52u, "MICHAEL OC", 4u, 1);
+    mono_fill_rect(32u, 32u, 736u, 64u, 1);
+    mono_draw_text(56u, 50u, title, 3u, 1);
+    mono_fill_rect(80u, 112u, 640u, 2u, 1);
+    mono_draw_text(80u, 530u, "ESC HOME", 1u, 0);
+}
 
-    mono_draw_text(80u, 145u, "SYSTEM BOOT OK", 3u, 0);
-    mono_outline_rect(600u, 132u, 112u, 112u, 1);
-    mono_outline_rect(622u, 154u, 68u, 68u, 1);
-    mono_fill_rect(642u, 174u, 28u, 28u, 1);
+static void draw_home_screen(void)
+{
+    draw_window_frame("MICHAEL OC");
+    mono_draw_text(80u, 140u, "MONOCHROME SYSTEM READY", 2u, 0);
+    mono_draw_text(80u, 222u, "1 SYSTEM STATUS", 2u, 0);
+    mono_draw_text(80u, 266u, "2 KEYBOARD TEST", 2u, 0);
+    mono_draw_text(80u, 310u, "3 FRAMEBUFFER TEST", 2u, 0);
+    mono_fill_rect(80u, 370u, 640u, 2u, 1);
+    mono_draw_text(80u, 405u, "PRESS 1 2 OR 3 TO OPEN A SCREEN", 1u, 0);
+    mono_draw_text(80u, 430u, "USE ESC TO RETURN HOME", 1u, 0);
+    mono_draw_text(80u, 485u, "NO FILESYSTEM OR USER APPS YET", 1u, 0);
+}
 
-    mono_fill_rect(80u, 206u, 640u, 2u, 1);
-    mono_draw_text(80u, 238u, "ONE-BIT UI READY", 2u, 0);
-    mono_draw_text(80u, 274u, "GRUB MULTIBOOT / X86", 2u, 0);
-    mono_draw_text(80u, 310u, "FRAMEBUFFER ONLINE", 2u, 0);
+static void draw_system_screen(void)
+{
+    draw_window_frame("SYSTEM STATUS");
+    mono_draw_text(80u, 140u, "FRAMEBUFFER ACTIVE", 2u, 0);
 
-    mono_fill_rect(80u, 356u, 640u, 2u, 1);
-    mono_draw_text(80u, 390u, "GRAPHICS: BLACK / WHITE", 2u, 0);
-    mono_draw_text(80u, 426u, "NEXT: INPUT AND DESKTOP", 2u, 0);
-    mono_draw_text(80u, 462u, "THEN: FILESYSTEM AND APPS", 2u, 0);
+    mono_draw_text(80u, 198u, "WIDTH:", 2u, 0);
+    mono_draw_uint(190u, 198u, active_fb_width, 2u);
 
-    mono_draw_text(80u, 526u, "MICHAEL OC - DEV BUILD", 1u, 0);
+    mono_draw_text(80u, 234u, "HEIGHT:", 2u, 0);
+    mono_draw_uint(190u, 234u, active_fb_height, 2u);
+
+    mono_draw_text(80u, 270u, "BPP:", 2u, 0);
+    mono_draw_uint(190u, 270u, active_fb_bpp, 2u);
+
+    mono_draw_text(80u, 322u, "CANVAS: 1 BIT / PIXEL", 2u, 0);
+    mono_draw_text(80u, 370u, "DISPLAY: BLACK / WHITE", 2u, 0);
+    mono_draw_text(80u, 418u, "INPUT: PS/2 POLLING", 2u, 0);
+}
+
+static void draw_keyboard_screen(void)
+{
+    draw_window_frame("KEYBOARD TEST");
+    mono_draw_text(80u, 145u, "PRESS ANY KEY", 2u, 0);
+    mono_draw_text(80u, 205u, "LAST SCAN CODE:", 2u, 0);
+    mono_draw_hex_byte(290u, 205u, last_key_scancode, 2u);
+    mono_draw_text(80u, 270u, "THIS PAGE SHOWS MAKE SCANCODES", 1u, 0);
+    mono_draw_text(80u, 295u, "KEY RELEASE CODES ARE IGNORED", 1u, 0);
+}
+
+static void draw_framebuffer_screen(void)
+{
+    draw_window_frame("FRAMEBUFFER TEST");
+    mono_draw_text(80u, 140u, "TWO SOLID PIXEL VALUES", 2u, 0);
+
+    mono_outline_rect(78u, 185u, 260u, 150u, 1);
+    mono_fill_rect(80u, 187u, 256u, 146u, 1);
+    mono_draw_text(105u, 246u, "WHITE", 3u, 1);
+
+    mono_outline_rect(398u, 185u, 260u, 150u, 1);
+    mono_draw_text(430u, 246u, "BLACK", 3u, 0);
+
+    mono_draw_text(80u, 380u, "THE SOFTWARE CANVAS STORES ONE BIT", 1u, 0);
+    mono_draw_text(80u, 405u, "PER PIXEL; NO GREY VALUE EXISTS", 1u, 0);
+}
+
+static void render_active_screen(void)
+{
+    switch (active_screen) {
+    case UI_SCREEN_SYSTEM:
+        draw_system_screen();
+        break;
+    case UI_SCREEN_KEYBOARD:
+        draw_keyboard_screen();
+        break;
+    case UI_SCREEN_FRAMEBUFFER:
+        draw_framebuffer_screen();
+        break;
+    case UI_SCREEN_HOME:
+    default:
+        draw_home_screen();
+        break;
+    }
+}
+
+static int handle_ui_scancode(u8 scancode)
+{
+    /* Ignore extended prefixes and key-release events in this initial driver. */
+    if (scancode == 0xE0u || scancode == 0xE1u || (scancode & 0x80u) != 0u) {
+        return 0;
+    }
+
+    if (scancode == 0x01u) {
+        if (active_screen != UI_SCREEN_HOME) {
+            active_screen = UI_SCREEN_HOME;
+            return 1;
+        }
+        return 0;
+    }
+
+    if (active_screen == UI_SCREEN_HOME) {
+        if (scancode == 0x02u) {
+            active_screen = UI_SCREEN_SYSTEM;
+            return 1;
+        }
+        if (scancode == 0x03u) {
+            active_screen = UI_SCREEN_KEYBOARD;
+            last_key_scancode = 0u;
+            return 1;
+        }
+        if (scancode == 0x04u) {
+            active_screen = UI_SCREEN_FRAMEBUFFER;
+            return 1;
+        }
+        return 0;
+    }
+
+    if (active_screen == UI_SCREEN_KEYBOARD) {
+        last_key_scancode = scancode;
+        return 1;
+    }
+
+    return 0;
+}
+
+static int ui_input_self_test(void)
+{
+    active_screen = UI_SCREEN_HOME;
+    last_key_scancode = 0u;
+
+    if (!handle_ui_scancode(0x03u) || active_screen != UI_SCREEN_KEYBOARD) {
+        return 0;
+    }
+    if (!handle_ui_scancode(0x1Eu) || last_key_scancode != 0x1Eu) {
+        return 0;
+    }
+    if (handle_ui_scancode(0x9Eu) || last_key_scancode != 0x1Eu) {
+        return 0;
+    }
+    if (!handle_ui_scancode(0x01u) || active_screen != UI_SCREEN_HOME) {
+        return 0;
+    }
+    if (!handle_ui_scancode(0x02u) || active_screen != UI_SCREEN_SYSTEM) {
+        return 0;
+    }
+    if (!handle_ui_scancode(0x01u) || active_screen != UI_SCREEN_HOME) {
+        return 0;
+    }
+    if (!handle_ui_scancode(0x04u) || active_screen != UI_SCREEN_FRAMEBUFFER) {
+        return 0;
+    }
+    if (!handle_ui_scancode(0x01u) || active_screen != UI_SCREEN_HOME) {
+        return 0;
+    }
+
+    return 1;
 }
 
 static u32 channel_mask(u8 position, u8 size, u8 bpp)
@@ -489,8 +686,16 @@ static int initialize_graphics(u32 multiboot_info_address)
     }
 
     const u32 white_pixel = red_mask | green_mask | blue_mask;
+
     canvas_width = width < MONO_WIDTH ? width : MONO_WIDTH;
     canvas_height = height < MONO_HEIGHT ? height : MONO_HEIGHT;
+    active_framebuffer = (volatile u8 *)(u32)info->framebuffer_addr;
+    active_framebuffer_pitch = info->framebuffer_pitch;
+    active_bytes_per_pixel = bytes_per_pixel;
+    active_white_pixel = white_pixel;
+    active_fb_width = width;
+    active_fb_height = height;
+    active_fb_bpp = bpp;
 
     if (canvas_width < 320u || canvas_height < 200u ||
         !mono_buffer_self_test()) {
@@ -499,23 +704,51 @@ static int initialize_graphics(u32 multiboot_info_address)
 
     serial_write("MICHAEL_OC_MONO_TEST_OK\r\n");
 
-    draw_monochrome_boot_screen();
-
-    volatile u8 *framebuffer = (volatile u8 *)(u32)info->framebuffer_addr;
-    for (u32 y = 0; y < canvas_height; ++y) {
-        const u32 row_offset = y * info->framebuffer_pitch;
-        for (u32 x = 0; x < canvas_width; ++x) {
-            const u32 value = mono_get_pixel(x, y) != 0 ? white_pixel : 0u;
-            const u32 offset = row_offset + x * bytes_per_pixel;
-
-            for (u32 byte = 0; byte < bytes_per_pixel; ++byte) {
-                framebuffer[offset + byte] = (u8)(value >> (8u * byte));
-            }
-        }
+    active_screen = UI_SCREEN_HOME;
+    last_key_scancode = 0u;
+    if (!ui_input_self_test()) {
+        serial_write("MICHAEL_OC_INPUT_TEST_FAILED\r\n");
+        return 0;
     }
+    serial_write("MICHAEL_OC_INPUT_TEST_OK\r\n");
+
+    active_screen = UI_SCREEN_HOME;
+    last_key_scancode = 0u;
+    render_active_screen();
+    mono_flush_framebuffer();
 
     serial_write("MICHAEL_OC_FB_OK\r\n");
     return 1;
+}
+
+static int keyboard_try_read_scancode(u8 *scancode)
+{
+    const u8 status = inb(0x64u);
+
+    /* Output-buffer-full must be set; ignore auxiliary (mouse) bytes. */
+    if ((status & 0x01u) == 0u || (status & 0x20u) != 0u) {
+        return 0;
+    }
+
+    *scancode = inb(0x60u);
+    return 1;
+}
+
+static void keyboard_poll_loop(void)
+{
+    serial_write("MICHAEL_OC_KEYBOARD_POLL_OK\r\n");
+
+    for (;;) {
+        u8 scancode;
+        if (keyboard_try_read_scancode(&scancode)) {
+            if (handle_ui_scancode(scancode)) {
+                render_active_screen();
+                mono_flush_framebuffer();
+            }
+        } else {
+            __asm__ volatile ("pause");
+        }
+    }
 }
 
 static void show_vga_fallback(void)
@@ -550,7 +783,8 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
     if (!initialize_graphics(multiboot_info)) {
         serial_write("MICHAEL_OC_FB_UNAVAILABLE\r\n");
         show_vga_fallback();
+        halt_forever();
     }
 
-    halt_forever();
+    keyboard_poll_loop();
 }
