@@ -1,22 +1,70 @@
 /*
  * Michael OC early kernel bootstrap.
  *
- * This file intentionally avoids libc and performs direct device I/O.
- * VGA text mode is an early bring-up console only; a true packed 1-bit
- * framebuffer and graphical desktop are later milestones.
+ * The software canvas is packed at one bit per pixel. A Multiboot-provided
+ * RGB framebuffer is only the scan-out target; every output pixel is either
+ * black or full white. VGA text mode remains a diagnostic fallback.
  */
 
-typedef unsigned char  u8;
-typedef unsigned short u16;
-typedef unsigned int   u32;
+typedef unsigned char      u8;
+typedef unsigned short     u16;
+typedef unsigned int       u32;
+typedef unsigned long long u64;
 
 #define MULTIBOOT_BOOTLOADER_MAGIC 0x2BADB002u
+#define MULTIBOOT_INFO_FRAMEBUFFER (1u << 12)
 
 #define VGA_WIDTH  80u
 #define VGA_HEIGHT 25u
 #define VGA_MEMORY ((volatile u16 *)0xB8000u)
 
 #define COM1 0x3F8u
+
+#define MONO_WIDTH 800u
+#define MONO_HEIGHT 600u
+#define MONO_BUFFER_BYTES ((MONO_WIDTH * MONO_HEIGHT + 7u) / 8u)
+
+typedef struct __attribute__((packed)) {
+    u32 flags;
+    u32 mem_lower;
+    u32 mem_upper;
+    u32 boot_device;
+    u32 cmdline;
+    u32 mods_count;
+    u32 mods_addr;
+    u32 symbols[4];
+    u32 mmap_length;
+    u32 mmap_addr;
+    u32 drives_length;
+    u32 drives_addr;
+    u32 config_table;
+    u32 boot_loader_name;
+    u32 apm_table;
+    u32 vbe_control_info;
+    u32 vbe_mode_info;
+    u16 vbe_mode;
+    u16 vbe_interface_seg;
+    u16 vbe_interface_off;
+    u16 vbe_interface_len;
+    u64 framebuffer_addr;
+    u32 framebuffer_pitch;
+    u32 framebuffer_width;
+    u32 framebuffer_height;
+    u8 framebuffer_bpp;
+    u8 framebuffer_type;
+    struct __attribute__((packed)) {
+        u8 red_field_position;
+        u8 red_mask_size;
+        u8 green_field_position;
+        u8 green_mask_size;
+        u8 blue_field_position;
+        u8 blue_mask_size;
+    } color;
+} multiboot_info_t;
+
+static u8 mono_buffer[MONO_BUFFER_BYTES];
+static u32 canvas_width;
+static u32 canvas_height;
 
 static u32 vga_index(u32 row, u32 col)
 {
@@ -99,38 +147,346 @@ static void halt_forever(void)
     }
 }
 
-void kernel_main(u32 multiboot_magic, u32 multiboot_info)
+/* Only this packed buffer stores the user-facing graphics: one bit/pixel. */
+static void mono_clear(void)
 {
-    (void)multiboot_info;
-    serial_init();
-    serial_write("\r\nMichael OC: kernel entry reached.\r\n");
+    for (u32 i = 0; i < MONO_BUFFER_BYTES; ++i) {
+        mono_buffer[i] = 0u;
+    }
+}
 
+static void mono_put_pixel(u32 x, u32 y, int white)
+{
+    if (x >= canvas_width || y >= canvas_height) {
+        return;
+    }
+
+    const u32 bit_index = y * MONO_WIDTH + x;
+    const u32 byte_index = bit_index >> 3;
+    const u8 mask = (u8)(1u << (7u - (bit_index & 7u)));
+
+    if (white != 0) {
+        mono_buffer[byte_index] |= mask;
+    } else {
+        mono_buffer[byte_index] &= (u8)~mask;
+    }
+}
+
+static int mono_get_pixel(u32 x, u32 y)
+{
+    if (x >= canvas_width || y >= canvas_height) {
+        return 0;
+    }
+
+    const u32 bit_index = y * MONO_WIDTH + x;
+    const u32 byte_index = bit_index >> 3;
+    const u8 mask = (u8)(1u << (7u - (bit_index & 7u)));
+    return (mono_buffer[byte_index] & mask) != 0u;
+}
+
+static void mono_fill_rect(u32 x, u32 y, u32 width, u32 height, int white)
+{
+    for (u32 row = 0; row < height; ++row) {
+        for (u32 col = 0; col < width; ++col) {
+            mono_put_pixel(x + col, y + row, white);
+        }
+    }
+}
+
+static void mono_outline_rect(u32 x, u32 y, u32 width, u32 height, int white)
+{
+    if (width == 0u || height == 0u) {
+        return;
+    }
+
+    mono_fill_rect(x, y, width, 1u, white);
+    mono_fill_rect(x, y + height - 1u, width, 1u, white);
+    mono_fill_rect(x, y, 1u, height, white);
+    mono_fill_rect(x + width - 1u, y, 1u, height, white);
+}
+
+static const u8 font_letters[26][7] = {
+    {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}, /* A */
+    {0x1E,0x11,0x11,0x1E,0x11,0x11,0x1E}, /* B */
+    {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E}, /* C */
+    {0x1E,0x11,0x11,0x11,0x11,0x11,0x1E}, /* D */
+    {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F}, /* E */
+    {0x1F,0x10,0x10,0x1E,0x10,0x10,0x10}, /* F */
+    {0x0E,0x11,0x10,0x17,0x11,0x11,0x0F}, /* G */
+    {0x11,0x11,0x11,0x1F,0x11,0x11,0x11}, /* H */
+    {0x0E,0x04,0x04,0x04,0x04,0x04,0x0E}, /* I */
+    {0x07,0x02,0x02,0x02,0x12,0x12,0x0C}, /* J */
+    {0x11,0x12,0x14,0x18,0x14,0x12,0x11}, /* K */
+    {0x10,0x10,0x10,0x10,0x10,0x10,0x1F}, /* L */
+    {0x11,0x1B,0x15,0x15,0x11,0x11,0x11}, /* M */
+    {0x11,0x19,0x15,0x13,0x11,0x11,0x11}, /* N */
+    {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E}, /* O */
+    {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10}, /* P */
+    {0x0E,0x11,0x11,0x11,0x15,0x12,0x0D}, /* Q */
+    {0x1E,0x11,0x11,0x1E,0x14,0x12,0x11}, /* R */
+    {0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E}, /* S */
+    {0x1F,0x04,0x04,0x04,0x04,0x04,0x04}, /* T */
+    {0x11,0x11,0x11,0x11,0x11,0x11,0x0E}, /* U */
+    {0x11,0x11,0x11,0x11,0x11,0x0A,0x04}, /* V */
+    {0x11,0x11,0x11,0x15,0x15,0x15,0x0A}, /* W */
+    {0x11,0x11,0x0A,0x04,0x0A,0x11,0x11}, /* X */
+    {0x11,0x11,0x0A,0x04,0x04,0x04,0x04}, /* Y */
+    {0x1F,0x01,0x02,0x04,0x08,0x10,0x1F}  /* Z */
+};
+
+static const u8 font_digits[10][7] = {
+    {0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}, /* 0 */
+    {0x04,0x0C,0x04,0x04,0x04,0x04,0x0E}, /* 1 */
+    {0x0E,0x11,0x01,0x02,0x04,0x08,0x1F}, /* 2 */
+    {0x1E,0x01,0x01,0x0E,0x01,0x01,0x1E}, /* 3 */
+    {0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}, /* 4 */
+    {0x1F,0x10,0x10,0x1E,0x01,0x01,0x1E}, /* 5 */
+    {0x0E,0x10,0x10,0x1E,0x11,0x11,0x0E}, /* 6 */
+    {0x1F,0x01,0x02,0x04,0x08,0x08,0x08}, /* 7 */
+    {0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}, /* 8 */
+    {0x0E,0x11,0x11,0x0F,0x01,0x01,0x0E}  /* 9 */
+};
+
+static u8 font_row(char ch, u32 row)
+{
+    if (row >= 7u) {
+        return 0u;
+    }
+
+    if (ch >= 'a' && ch <= 'z') {
+        ch = (char)(ch - 'a' + 'A');
+    }
+
+    if (ch >= 'A' && ch <= 'Z') {
+        return font_letters[(u32)(ch - 'A')][row];
+    }
+
+    if (ch >= '0' && ch <= '9') {
+        return font_digits[(u32)(ch - '0')][row];
+    }
+
+    switch (ch) {
+    case '-': return row == 3u ? 0x1Fu : 0u;
+    case ':': return (row == 2u || row == 5u) ? 0x04u : 0u;
+    case '.': return row == 6u ? 0x04u : 0u;
+    case '/':
+        switch (row) {
+        case 0u: return 0x01u;
+        case 1u: return 0x02u;
+        case 2u: return 0x02u;
+        case 3u: return 0x04u;
+        case 4u: return 0x08u;
+        case 5u: return 0x08u;
+        default: return 0x10u;
+        }
+    case '|': return 0x04u;
+    case '_': return row == 6u ? 0x1Fu : 0u;
+    default: return 0u;
+    }
+}
+
+static void mono_draw_char(u32 x, u32 y, char ch, u32 scale, int invert)
+{
+    for (u32 row = 0; row < 7u; ++row) {
+        const u8 bits = font_row(ch, row);
+        for (u32 col = 0; col < 5u; ++col) {
+            const int lit = (bits & (u8)(1u << (4u - col))) != 0u;
+            const int white = invert != 0 ? !lit : lit;
+
+            for (u32 sy = 0; sy < scale; ++sy) {
+                for (u32 sx = 0; sx < scale; ++sx) {
+                    mono_put_pixel(x + col * scale + sx,
+                                   y + row * scale + sy, white);
+                }
+            }
+        }
+    }
+}
+
+static void mono_draw_text(u32 x, u32 y, const char *text,
+                           u32 scale, int invert)
+{
+    while (*text != '\0') {
+        mono_draw_char(x, y, *text, scale, invert);
+        x += 6u * scale;
+        ++text;
+    }
+}
+
+static int mono_buffer_self_test(void)
+{
+    mono_clear();
+
+    if (mono_get_pixel(0u, 0u) != 0) {
+        return 0;
+    }
+
+    mono_put_pixel(0u, 0u, 1);
+    if (mono_get_pixel(0u, 0u) == 0) {
+        return 0;
+    }
+
+    mono_put_pixel(0u, 0u, 0);
+    if (mono_get_pixel(0u, 0u) != 0) {
+        return 0;
+    }
+
+    mono_put_pixel(canvas_width - 1u, canvas_height - 1u, 1);
+    if (mono_get_pixel(canvas_width - 1u, canvas_height - 1u) == 0) {
+        return 0;
+    }
+
+    mono_clear();
+    return 1;
+}
+
+static void draw_monochrome_boot_screen(void)
+{
+    mono_clear();
+
+    mono_outline_rect(24u, 24u, 752u, 552u, 1);
+    mono_fill_rect(32u, 32u, 736u, 72u, 1);
+    mono_draw_text(72u, 52u, "MICHAEL OC", 4u, 1);
+
+    mono_draw_text(80u, 145u, "SYSTEM BOOT OK", 3u, 0);
+    mono_outline_rect(600u, 132u, 112u, 112u, 1);
+    mono_outline_rect(622u, 154u, 68u, 68u, 1);
+    mono_fill_rect(642u, 174u, 28u, 28u, 1);
+
+    mono_fill_rect(80u, 206u, 640u, 2u, 1);
+    mono_draw_text(80u, 238u, "ONE-BIT UI READY", 2u, 0);
+    mono_draw_text(80u, 274u, "GRUB MULTIBOOT / X86", 2u, 0);
+    mono_draw_text(80u, 310u, "FRAMEBUFFER ONLINE", 2u, 0);
+
+    mono_fill_rect(80u, 356u, 640u, 2u, 1);
+    mono_draw_text(80u, 390u, "GRAPHICS: BLACK / WHITE", 2u, 0);
+    mono_draw_text(80u, 426u, "NEXT: INPUT AND DESKTOP", 2u, 0);
+    mono_draw_text(80u, 462u, "THEN: FILESYSTEM AND APPS", 2u, 0);
+
+    mono_draw_text(80u, 526u, "MICHAEL OC - DEV BUILD", 1u, 0);
+}
+
+static u32 channel_mask(u8 position, u8 size, u8 bpp)
+{
+    if (size == 0u || size > 8u || (u32)position + (u32)size > (u32)bpp) {
+        return 0u;
+    }
+
+    return ((1u << size) - 1u) << position;
+}
+
+static int initialize_graphics(u32 multiboot_info_address)
+{
+    if (multiboot_info_address == 0u) {
+        return 0;
+    }
+
+    const multiboot_info_t *info =
+        (const multiboot_info_t *)multiboot_info_address;
+
+    if ((info->flags & MULTIBOOT_INFO_FRAMEBUFFER) == 0u ||
+        info->framebuffer_type != 1u) {
+        return 0;
+    }
+
+    if (info->framebuffer_addr > 0xFFFFFFFFull) {
+        return 0;
+    }
+
+    const u32 width = info->framebuffer_width;
+    const u32 height = info->framebuffer_height;
+    const u32 bpp = (u32)info->framebuffer_bpp;
+
+    if (width < 320u || height < 200u ||
+        width > 4096u || height > 2160u ||
+        (bpp != 24u && bpp != 32u)) {
+        return 0;
+    }
+
+    const u32 bytes_per_pixel = bpp / 8u;
+    if ((u64)info->framebuffer_pitch < (u64)width * bytes_per_pixel) {
+        return 0;
+    }
+
+    const u64 framebuffer_end = info->framebuffer_addr +
+        (u64)info->framebuffer_pitch * (u64)height;
+    if (framebuffer_end > 0x100000000ull) {
+        return 0;
+    }
+
+    const u32 red_mask = channel_mask(info->color.red_field_position,
+                                      info->color.red_mask_size, (u8)bpp);
+    const u32 green_mask = channel_mask(info->color.green_field_position,
+                                        info->color.green_mask_size, (u8)bpp);
+    const u32 blue_mask = channel_mask(info->color.blue_field_position,
+                                       info->color.blue_mask_size, (u8)bpp);
+    if (red_mask == 0u || green_mask == 0u || blue_mask == 0u) {
+        return 0;
+    }
+
+    const u32 white_pixel = red_mask | green_mask | blue_mask;
+    canvas_width = width < MONO_WIDTH ? width : MONO_WIDTH;
+    canvas_height = height < MONO_HEIGHT ? height : MONO_HEIGHT;
+
+    if (canvas_width < 320u || canvas_height < 200u ||
+        !mono_buffer_self_test()) {
+        return 0;
+    }
+
+    serial_write("MICHAEL_OC_MONO_TEST_OK\r\n");
+
+    draw_monochrome_boot_screen();
+
+    volatile u8 *framebuffer = (volatile u8 *)(u32)info->framebuffer_addr;
+    for (u32 y = 0; y < canvas_height; ++y) {
+        const u32 row_offset = y * info->framebuffer_pitch;
+        for (u32 x = 0; x < canvas_width; ++x) {
+            const u32 value = mono_get_pixel(x, y) != 0 ? white_pixel : 0u;
+            const u32 offset = row_offset + x * bytes_per_pixel;
+
+            for (u32 byte = 0; byte < bytes_per_pixel; ++byte) {
+                framebuffer[offset + byte] = (u8)(value >> (8u * byte));
+            }
+        }
+    }
+
+    serial_write("MICHAEL_OC_FB_OK\r\n");
+    return 1;
+}
+
+static void show_vga_fallback(void)
+{
     vga_clear();
     vga_write_at(0u, 0u, " MICHAEL OC - KERNEL BOOT ", 0xF0u);
     vga_write_at(2u, 2u, "Independent operating system / early bootstrap", 0x0Fu);
+    vga_write_at(4u, 2u, "BOOT STATUS : OK", 0x0Fu);
+    vga_write_at(5u, 2u, "ARCHITECTURE: x86, 32-bit protected mode", 0x0Fu);
+    vga_write_at(6u, 2u, "LOADER      : GRUB Multiboot v1", 0x0Fu);
+    vga_write_at(7u, 2u, "DISPLAY     : framebuffer unavailable", 0x0Fu);
+    vga_write_at(10u, 2u, "GRAPHICAL BOOT TEST DID NOT PASS", 0x0Fu);
+    vga_write_at(12u, 2u, "Check GRUB video mode and Multiboot framebuffer data.", 0x0Fu);
+    vga_write_at(15u, 2u, "MICHAEL_OC_FB_UNAVAILABLE", 0x0Fu);
+}
+
+void kernel_main(u32 multiboot_magic, u32 multiboot_info)
+{
+    serial_init();
+    serial_write("\r\nMichael OC: kernel entry reached.\r\n");
 
     if (multiboot_magic != MULTIBOOT_BOOTLOADER_MAGIC) {
         serial_write("ERROR: invalid Multiboot magic.\r\n");
-        vga_write_at(4u, 2u, "BOOT STATUS : ERROR", 0x0Fu);
-        vga_write_at(6u, 2u, "Invalid Multiboot hand-off value.", 0x0Fu);
+        vga_clear();
+        vga_write_at(0u, 0u, "MICHAEL OC - BOOT ERROR", 0xF0u);
+        vga_write_at(2u, 2u, "Invalid Multiboot hand-off value.", 0x0Fu);
         halt_forever();
     }
 
     serial_write("MICHAEL_OC_BOOT_OK\r\n");
 
-    vga_write_at(4u, 2u, "BOOT STATUS : OK", 0x0Fu);
-    vga_write_at(5u, 2u, "ARCHITECTURE: x86, 32-bit protected mode", 0x0Fu);
-    vga_write_at(6u, 2u, "LOADER      : GRUB Multiboot v1", 0x0Fu);
-    vga_write_at(7u, 2u, "DISPLAY     : VGA text, black and white only", 0x0Fu);
-
-    vga_write_at(10u, 2u, "EARLY BOOTSTRAP - NOT THE FINISHED OPERATING SYSTEM", 0x0Fu);
-    vga_write_at(12u, 2u, "NEXT: 1-BIT FRAMEBUFFER, INPUT, AND GRAPHICAL DESKTOP", 0x0Fu);
-    vga_write_at(13u, 2u, "THEN: PERSISTENT STORAGE, FILESYSTEM, AND REAL APPS", 0x0Fu);
-
-    vga_write_at(16u, 2u, "Serial test marker: MICHAEL_OC_BOOT_OK", 0x0Fu);
-    vga_write_at(18u, 2u, "No persistent filesystem or general app loader yet.", 0x0Fu);
-    vga_write_at(20u, 2u, "Kernel idles so the boot state remains visible.", 0x0Fu);
-    vga_write_at(23u, 2u, "Michael OC | development build", 0x0Fu);
+    if (!initialize_graphics(multiboot_info)) {
+        serial_write("MICHAEL_OC_FB_UNAVAILABLE\r\n");
+        show_vga_fallback();
+    }
 
     halt_forever();
 }
