@@ -8,6 +8,7 @@
 
 #include "multiboot.h"
 #include "memory.h"
+#include "interrupts.h"
 
 #define VGA_WIDTH  80u
 #define VGA_HEIGHT 25u
@@ -755,6 +756,7 @@ static void show_vga_fallback(void)
 void kernel_main(u32 multiboot_magic, u32 multiboot_info)
 {
     serial_init();
+    interrupts_init();
     serial_write("\r\nMichael OC: kernel entry reached.\r\n");
 
     if (multiboot_magic != MULTIBOOT_BOOTLOADER_MAGIC) {
@@ -779,5 +781,10 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
         halt_forever();
     }
 
+#ifdef MICHAEL_OC_EXCEPTION_SELF_TEST
+    serial_write("MICHAEL_OC_EXCEPTION_SELF_TEST_TRIGGER\r\n");
+    __asm__ volatile ("int $3");
+    serial_write("MICHAEL_OC_EXCEPTION_TEST_FAILED\r\n");
+#endif
     keyboard_poll_loop();
 }

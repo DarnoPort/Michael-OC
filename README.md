@@ -9,11 +9,12 @@ Michael OC is an independent operating-system project targeting QEMU on Ubuntu L
 - 800x600 packed one-bit software canvas and monochrome framebuffer renderer.
 - Keyboard-driven diagnostic UI: home, system status, keyboard test and framebuffer test.
 - PS/2 keyboard polling with an end-to-end QEMU key-injection test.
+- IDT entries for CPU exception vectors 0–31, serial fatal-exception reporting, and a dedicated QEMU `INT3` dispatch test.
 - Multiboot memory-map parser and physical page allocator for fully usable RAM pages below 4 GiB.
 - Boot-time allocator self-test that allocates a page, checks page alignment, writes and reads a test value, frees the page, checks the free-page count, and rejects double-free.
 - Reserved low memory, kernel image, Multiboot data structures, boot modules, and framebuffer pages.
 
-**This is still early OS development, not a completed general-purpose operating system.** The UI currently runs in kernel context. The allocator is physical-only; paging/virtual memory, interrupts, mouse input, persistent filesystem, userspace, a general executable loader, app installation, and the requested built-in applications remain unfinished.
+**This is still early OS development, not a completed general-purpose operating system.** The UI currently runs in kernel context. The allocator is physical-only; paging/virtual memory, hardware IRQ routing and interrupt-driven keyboard input, mouse input, persistent filesystem, userspace, a general executable loader, app installation, and the requested built-in applications remain unfinished. CPU exceptions 0–31 have IDT gates and a fatal serial diagnostic path.
 
 The system-status page shows the allocator readiness and current count of free physical pages after a successful initialization.
 
@@ -35,8 +36,8 @@ Run automated tests:
 
     make test
 
-The test builds the ISO, verifies the Multiboot header, boots QEMU, and requires serial markers for kernel entry, physical-memory manager self-test, one-bit canvas self-test, UI input-state self-test, framebuffer flush and keyboard polling. It then starts QEMU with its HMP monitor and injects key 2, A and Escape. The test checks the keyboard page transition, the A make scancode and the return to the home page.
+The test builds the ISO, verifies the Multiboot header, boots QEMU, and requires serial markers for kernel entry, IDT setup, physical-memory manager self-test, one-bit canvas self-test, UI input-state self-test, framebuffer flush and keyboard polling. It then starts QEMU with its HMP monitor and injects key 2, A and Escape. A second, separately compiled diagnostic kernel executes `INT3`; the test checks the exception vector and synthetic error-code reporting.
 
 ## Planned development sequence
 
-Next milestones are an interrupt descriptor table and exception handling, improved memory management and paging, mouse support, persistent storage and a filesystem, a stable application ABI and loader, and working built-in applications. Features must be labelled as verified, partial, or not implemented rather than represented by demo-only placeholders.
+Next milestones are PIC setup and hardware IRQ handlers, interrupt-driven keyboard input, paging and virtual memory, mouse support, persistent storage and a filesystem, a stable application ABI and loader, and working built-in applications. Features must be labelled as verified, partial, or not implemented rather than represented by demo-only placeholders.

@@ -35,7 +35,7 @@
 | Physical-memory allocator self-test | Implemented, smoke-tested | Allocates one page, checks alignment/count, writes and reads a value, frees and checks count restoration and double-free rejection |
 | Paging / virtual memory | Not implemented | The current allocator returns physical addresses and runs before paging |
 | Mouse input | Not implemented | No mouse packet decoder or pointer yet |
-| Interrupt/exception framework | Not implemented | Keyboard input polls the controller with interrupts disabled |
+| CPU exception IDT and fatal handler | Implemented, QEMU-tested by this change | Gates for vectors 0–31; separate test kernel triggers `INT3` and checks vector/error-code output. Hardware IRQ routing and recovery are not implemented |
 | Persistent disk/filesystem | Not implemented | No block driver, filesystem or persistent user files yet |
 | Userspace and system-call API | Not implemented | The UI currently runs in kernel context |
 | External app loading/install/remove | Not implemented | No executable loader, app ABI or package format yet |
@@ -47,9 +47,11 @@
 - src/multiboot.h — shared Multiboot info and memory-map structures.
 - src/memory.h and src/memory.c — physical frame allocator and allocator self-test.
 - src/kernel.c — serial diagnostics, one-bit canvas, monochrome UI pages, keyboard state handler and polled PS/2 input.
+- src/interrupts.h and src/interrupts.c — IDT setup, descriptor-register verification and fatal CPU exception diagnostics.
+- src/isr_stubs.S — 32 exception entry stubs and the common assembly frame builder.
 - linker.ld — kernel image layout and exported kernel bounds.
 - grub/grub.cfg — video mode, serial diagnostics and boot entry.
-- Makefile — kernel/ISO build, run, tool checks and test targets.
+- Makefile — kernel/ISO build, run, tool checks, keyboard test, and a separate QEMU exception-dispatch test kernel.
 - scripts/test_keyboard_input.py — QEMU HMP key-injection test.
 - .github/workflows/build.yml — Ubuntu CI build, QEMU test and ISO artifact upload.
 - README.md — setup, build, run, controls and known limitations.
@@ -78,8 +80,8 @@ The allocator is intentionally only a physical frame allocator at this stage. Pa
 
 ## Next tasks
 
-1. Add an IDT, exception handlers and a reliable diagnostic path for CPU faults.
-2. Migrate PS/2 input from polling to interrupt-driven input after the interrupt framework is stable.
+1. Configure and remap the PIC, then add tested hardware IRQ handlers while keeping unhandled IRQs masked.
+2. Migrate PS/2 input from polling to interrupt-driven input after IRQ routing is stable.
 3. Add paging and a virtual memory model, with tests for page mapping and unmapping.
 4. Add a block device and persistent filesystem in a QEMU disk image; test that data survives restarts.
 5. Define a stable kernel-to-app interface, executable format/loader, and application installation/removal.
