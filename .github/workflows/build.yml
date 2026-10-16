@@ -15,7 +15,7 @@ jobs:
       - name: Install build and emulator dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential gcc-multilib grub-pc-bin xorriso qemu-system-x86 make
+          sudo apt-get install -y build-essential gcc-multilib grub-pc-bin xorriso mtools qemu-system-x86 make
 
       - name: Build bootable ISO
         run: |
