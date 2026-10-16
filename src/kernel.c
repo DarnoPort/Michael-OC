@@ -823,6 +823,9 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
         if (ata_self_test()) {
             serial_write("MICHAEL_OC_ATA_TEST_OK\r\n");
         } else {
+            serial_write("MICHAEL_OC_ATA_TEST_FAILED_STAGE=");
+            serial_write_hex(ata_self_test_failure_stage());
+            serial_write("\r\n");
             serial_write("MICHAEL_OC_ATA_TEST_FAILED\r\n");
         }
 

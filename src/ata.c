@@ -34,6 +34,7 @@ static u8 pattern_sector[512];
 static u8 verify_sector[512];
 static u32 disk_sectors;
 static int device_ready;
+static u32 self_test_failure_stage;
 
 static inline void outb(u16 port, u8 value)
 {
@@ -236,7 +237,9 @@ static int sector_matches(const u8 *left, const u8 *right)
 
 int ata_self_test(void)
 {
+    self_test_failure_stage = 0u;
     if (!device_ready || !ata_read_sector(ATA_TEST_LBA, original_sector)) {
+        self_test_failure_stage = 1u;
         return 0;
     }
 
@@ -246,14 +249,27 @@ int ata_self_test(void)
 
     const int write_ok = ata_write_sector(ATA_TEST_LBA, pattern_sector);
     const int read_ok = write_ok && ata_read_sector(ATA_TEST_LBA, verify_sector);
-    int test_ok = read_ok && sector_matches(pattern_sector, verify_sector);
+    if (!write_ok) self_test_failure_stage = 2u;
+    else if (!read_ok) self_test_failure_stage = 3u;
+    else if (!sector_matches(pattern_sector, verify_sector)) self_test_failure_stage = 4u;
 
     /* Always attempt to restore the original scratch-sector contents. */
     const int restore_write_ok = ata_write_sector(ATA_TEST_LBA, original_sector);
     const int restore_read_ok =
         restore_write_ok && ata_read_sector(ATA_TEST_LBA, verify_sector);
-    if (!restore_read_ok || !sector_matches(original_sector, verify_sector)) {
-        test_ok = 0;
+    if (self_test_failure_stage == 0u && !restore_write_ok) {
+        self_test_failure_stage = 5u;
+    } else if (self_test_failure_stage == 0u && !restore_read_ok) {
+        self_test_failure_stage = 6u;
+    } else if (self_test_failure_stage == 0u &&
+               !sector_matches(original_sector, verify_sector)) {
+        self_test_failure_stage = 7u;
     }
-    return test_ok;
+
+    return self_test_failure_stage == 0u;
+}
+
+u32 ata_self_test_failure_stage(void)
+{
+    return self_test_failure_stage;
 }
