@@ -18,19 +18,19 @@
 
 | Component | Status | Evidence / limitation |
 |---|---|---|
-| Multiboot v1 entry and reproducible ISO build | Verified on earlier commit; latest fix pending CI | The previous green workflow built an ISO and started QEMU; this revision must rebuild |
-| Bootstrap GDT and CPU exception IDT | Verified on earlier commit | A separate QEMU INT3 test checked fatal exception reporting |
-| One-bit canvas / framebuffer renderer | Verified on earlier commit | 800×600 one-bit software backing buffer; output uses black or full RGB white |
-| PS/2 keyboard IRQ1 | Verified on earlier commit | QEMU monitor injection test checked UI navigation and scan-code delivery |
-| Physical page allocator | Verified on earlier commit | Parses usable RAM map and self-tests allocation/free; paging is absent |
-| ATA PIO disk driver | Verified by earlier storage test | Primary-master IDE, LBA28, bounded status polling, and cache flush |
-| MOCFS1 persistent filesystem | Verified by earlier storage test | Two-cold-boot persistence and CRUD test; fixed metadata table and contiguous extents |
-| File manager and text editor | Verified on earlier commit | UI test created/saved a file and reopened it after restart |
-| MOCApp on-disk interpreter | Implemented, latest CI pending | Bounded text-script interpreter with PRINT, CLEAR, WAITKEY, IFKEY, JUMP, SET/ADD/SUB, PRINTNUM, LS, READ, WRITE, and EXIT |
-| MOCApp file-manager workflow | Implemented, latest CI pending | .mapp launches from the file manager; F1 stops it and Escape returns |
-| Paging and virtual memory | Not implemented | The allocator returns directly addressable physical addresses |
+| Multiboot v1 entry and reproducible ISO build | Verified | CI run 38915742572 built the ISO, verified the Multiboot header, and booted the guest |
+| Bootstrap GDT and CPU exception IDT | Verified | Latest CI passed the INT3 exception-dispatch test |
+| One-bit canvas / framebuffer renderer | Verified | QEMU boot check confirms the 800×600 packed one-bit canvas and framebuffer output |
+| PS/2 keyboard IRQ1 | Verified | Latest QEMU keyboard test exercises key delivery, navigation, and the debug console |
+| Physical page allocator | Verified | RAM-map parsing and allocation/free self-test; paging now also enabled |
+| ATA PIO disk driver | Verified | QEMU persistence and filesystem integration tests use the primary-master IDE device |
+| MOCFS1 persistent filesystem | Verified | Latest CI passed two-cold-boot persistence and CRUD; fixed metadata table and contiguous extents remain limitations |
+| File manager and text editor | Verified | Latest CI passed file-manager/editor writes and reopened persisted content after reboot |
+| MOCApp on-disk interpreter | Verified by integration test | Latest CI exercised PRINT, WAITKEY, IFKEY/JUMP, SET/ADD/PRINTNUM and filesystem LS/READ/WRITE |
+| MOCApp file-manager workflow | Verified by integration test | Disk-resident script launch and exit path passed QEMU app test; host installer has separate checks |
+| Paging and virtual memory | Partial, verified | 4 KiB global supervisor identity map, absent null page, CR0.WP and read-only kernel text; no per-process address spaces |
 | Userspace isolation, syscall ABI, native ELF loader | Not implemented | UI and script interpreter run in kernel context; no protected user processes |
-| Timer and mouse drivers | Not implemented | Only keyboard IRQ1 has an active device handler |
+| PIT timer and PS/2 mouse | Verified foundation | PIT IRQ0 at about 100 Hz; PS/2 IRQ12 movement/button and mouse-driven menu navigation passed QEMU test |
 | Filesystem journaling/recovery | Not implemented | Metadata can become inconsistent if power-off occurs during an update |
 
 ## Source layout
@@ -66,9 +66,9 @@ Then run from the repository root:
 
 The ISO is build/michael-oc.iso. Persistent user files are stored in build/michael-oc-disk.img.
 
-## Latest CI diagnosis
+## Latest CI status
 
-Workflow run [38911241812](https://github.com/DarnoPort/Michael-OC/actions/runs/38911241812) failed during compilation. GCC reported an invalid storage class for editor_insert_byte followed by end-of-file parse errors. Inspection found a missing closure and misplaced file-dialog input/navigation code in ui_handle_file_manager_scancode. Commit cc12793573443af3822f242644cef3184bdb18c5 restores the previously working dialog and navigation flow while preserving the MOCApp launch branch. The follow-up CI run is the required verification of this fix.
+The latest complete workflow, [38915742572](https://github.com/DarnoPort/Michael-OC/actions/runs/38915742572), passed all steps, including ISO build, Multiboot header, QEMU boot, console navigation, mouse click navigation, exception dispatch, enforced kernel text protection, file persistence/CRUD, editor/MOCApp execution, and the host-side installer. Earlier failures on intermediate commits were fixed; do not treat those old run results as the current status.
 
 ## Next tasks
 
@@ -87,22 +87,26 @@ A source file or successful compile is not proof of runtime correctness. Track b
 
 A host-side installer now places a .mapp source file into the root of an existing MOCFS1 disk image without rebuilding the kernel ISO. It validates filesystem geometry, metadata relationships, extents, file-name rules, and the interpreter's size/line constraints. The operation edits a temporary copy and replaces the image only after a complete successful write. A standalone test checks the on-disk entry/data, duplicate-name rejection, oversized-source rejection, and unchanged image bytes after rejected operations. The QEMU app workflow installs another app after the ISO has already been built and then launches it from the guest file manager. This milestone remains pending until the latest CI run passes.
 
-## Paging implementation (latest change pending CI)
+## Paging implementation (verified by QEMU tests)
 
 A 4 KiB page-table implementation has been added. It identity-maps the 32-bit address space to preserve the current direct-physical-pointer convention, unmaps the null page, makes the linked kernel text/rodata region read-only, enables CR0.WP, and marks the Multiboot framebuffer with write-through/cache-disable flags. The boot self-test verifies page-zero absence, kernel text permissions, writable kernel data, temporary virtual-to-physical remapping, unmapping, translation failure after unmap, identity-map restoration, and no leaked physical frame.
 
-This is not per-process virtual memory or userspace isolation. The initial mapping remains a single global supervisor address space, with most addresses writable. Latest CI must pass before this milestone is marked verified.
+This is not per-process virtual memory or userspace isolation. The initial mapping remains a single global supervisor address space, with most addresses writable. Latest CI passed, including a dedicated page-fault test that exercises CPU enforcement.
 
-A dedicated page-fault diagnostic kernel now attempts a write to a kernel text address after enabling paging. Its test requires #PF vector 14, error code 3 (present-page write protection violation from supervisor mode), and CR2 matching the exact target address. This moves protection checking from inspecting PTE bits alone to observing CPU-enforced behavior; the test must pass in CI before marked verified.
+A dedicated page-fault diagnostic kernel attempts a write to a kernel text address after enabling paging. CI confirms #PF vector 14, error code 3 (present-page write protection violation from supervisor mode), and CR2 matching the exact target address.
 
-## Mouse input (latest change pending CI)
+## Mouse input (verified by QEMU tests)
 
 Added a PS/2 auxiliary-port initialization sequence, IRQ12 packet handling, packet resynchronization, signed delta decoding, bounded event queue, monochrome cursor rendering, and click dispatch to the existing keyboard-driven UI actions. Mouse initialization is optional on a machine without an auxiliary device; in that case boot continues with keyboard input only. QEMU testing now verifies movement and a click that navigates from the home screen into the file manager. In this kernel-resident prototype, pointer events and click handling execute in ring 0, as does the rest of the UI.
 
-## PIT timer (latest change pending CI)
+## PIT timer (verified by QEMU boot tests)
 
 PIT channel 0 is configured for approximately 100 Hz. IRQ0 increments a monotonic 32-bit tick counter, the boot test requires both timer setup and observed runtime ticks, and the system status screen reports whole-second tick-based uptime. The PIC mask now enables IRQ0 alongside IRQ1 and, when available, the IRQ2 cascade for mouse IRQ12. This does not yet implement preemptive multitasking or blocking sleep primitives.
 
 ## Kernel debug console (latest change pending CI)
 
 A bounded 64-line ring captures printable messages written by the kernel's `serial_write` path. The monochrome console renders 17 lines at a time and provides Up/Down scrolling, R to return to the latest logs, and Escape to return home. The home screen exposes it as shortcut 6 and it also supports mouse clicks on the menu entry. The keyboard integration test now opens the console, exercises scrolling/latest navigation, and exits. This is a view of kernel-side serial writes, not an interactive command shell; diagnostics emitted through the standalone serial routines in `interrupts.c` are not captured.
+
+## Debug console (verified in QEMU)
+
+The latest CI test opened the console from home with key 6, sent Up to exercise older-log scrolling, used R to return to the latest entries, and pressed Escape to return home. It uses a 64-line ring of kernel `serial_write` messages with a 17-line one-bit display window. The current console is a log viewer, not an interactive shell.

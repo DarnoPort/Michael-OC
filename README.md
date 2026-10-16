@@ -47,7 +47,7 @@ Scripts are limited to 16 KiB and 256 source lines. MOCApp is interpreted by the
 
     make test
 
-The automated suite compiles the kernel, verifies its Multiboot header, boots QEMU headlessly, checks serial startup markers, injects keyboard events through QEMU's monitor, tests exception dispatch using a separately compiled diagnostic kernel, verifies persistent filesystem CRUD across two cold boots, and exercises file-manager/editor/MOCApp workflows. The current run for the latest fix must pass before that change can be described as fully verified.
+The latest complete CI run, [38915742572](https://github.com/DarnoPort/Michael-OC/actions/runs/38915742572), passed ISO compilation, Multiboot validation, QEMU boot, keyboard navigation including the debug console, PS/2 mouse movement/click navigation, exception dispatch, CPU-enforced page protection, disk persistence/CRUD, editor and MOCApp execution, external app installation, and installer rejection/failure-atomicity checks.
 
 ## Known limitations and next priorities
 

@@ -1161,7 +1161,7 @@ static void draw_debug_console(void)
     for (u32 row = 0u; row < UI_CONSOLE_VISIBLE_LINES; ++row) {
         const u32 age = ui_console_scroll + (UI_CONSOLE_VISIBLE_LINES - 1u - row);
         if (age >= ui_log_count) continue;
-        const u32 newest = (ui_log_next + UI_LOG_LINES - 1u) % UI_LOG_LINES;
+        const u32 newest = ui_log_next;
         const u32 index = (newest + UI_LOG_LINES - age) % UI_LOG_LINES;
         mono_draw_text(80u, 140u + row * 20u, ui_log_lines[index], 1u, 0);
     }
