@@ -55,6 +55,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--qemu", required=True)
     parser.add_argument("--iso", required=True)
+    parser.add_argument("--disk", required=True)
     parser.add_argument("--work-dir", required=True)
     args = parser.parse_args()
 
@@ -71,6 +72,7 @@ def main() -> int:
     command = [
         args.qemu,
         "-m", "128M",
+        "-drive", f"file={args.disk},format=raw,if=ide,index=0",
         "-cdrom", args.iso,
         "-display", "none",
         "-serial", f"file:{serial_log}",

@@ -10,6 +10,7 @@
 #include "memory.h"
 #include "interrupts.h"
 #include "paging.h"
+#include "ata.h"
 
 #define VGA_WIDTH  80u
 #define VGA_HEIGHT 25u
@@ -793,6 +794,17 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
     } else {
         serial_write("MICHAEL_OC_PMM_FAIL\r\n");
         serial_write("MICHAEL_OC_PAGING_TEST_SKIPPED\r\n");
+    }
+
+    if (ata_init()) {
+        serial_write("MICHAEL_OC_ATA_OK\\r\\n");
+        if (ata_self_test()) {
+            serial_write("MICHAEL_OC_ATA_TEST_OK\\r\\n");
+        } else {
+            serial_write("MICHAEL_OC_ATA_TEST_FAILED\\r\\n");
+        }
+    } else {
+        serial_write("MICHAEL_OC_ATA_UNAVAILABLE\\r\\n");
     }
 
     if (!initialize_graphics(multiboot_info)) {
