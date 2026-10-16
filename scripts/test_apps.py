@@ -122,9 +122,18 @@ def main() -> int:
         send_key(monitor, "4")
         wait_marker(log, "MICHAEL_OC_UI_SCREEN=FILES", process)
         send_key(monitor, "ret")
+        wait_marker(log, "MICHAEL_OC_APP_STARTED=welcome.mapp", process)
+        wait_marker(log, "MICHAEL_OC_APP_WAITKEY", process)
+        send_key(monitor, "a")
+        wait_marker(log, "MICHAEL_OC_APP_KEY=a", process)
+        wait_marker(log, "MICHAEL_OC_APP_PRINT=KEY RECEIVED", process)
+        wait_marker(log, "MICHAEL_OC_APP_EXIT", process)
+        wait_marker(log, "MICHAEL_OC_UI_SCREEN=FILES", process)
+        send_key(monitor, "down")
+        send_key(monitor, "ret")
         wait_marker(log, "MICHAEL_OC_UI_SCREEN=EDITOR", process)
         wait_marker(log, "MICHAEL_OC_EDITOR_OPENED=demo SIZE=0x00000002", process)
-        print("PASS: file manager created a file, editor saved it, and a second boot reopened the persisted two-byte document.")
+        print("PASS: file manager/editor persisted a document, MOCApp executed a disk-resident script, and a fresh boot reopened the document.")
         return 0
     except Exception as exc:
         contents = log.read_text(errors="replace") if log.exists() else ""
