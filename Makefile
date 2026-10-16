@@ -6,6 +6,12 @@ GRUB_FILE := grub-file
 GRUB_MKRESCUE := grub-mkrescue
 QEMU := qemu-system-i386
 DISK_IMAGE := runtime/michael-oc-disk.img
+FS_WRITE_KERNEL := $(BUILD_DIR)/fs-persist-write/kernel.elf
+FS_WRITE_ISO_DIR := $(BUILD_DIR)/fs-persist-write-iso
+FS_WRITE_ISO := $(BUILD_DIR)/michael-oc-fs-write-test.iso
+FS_VERIFY_KERNEL := $(BUILD_DIR)/fs-persist-verify/kernel.elf
+FS_VERIFY_ISO_DIR := $(BUILD_DIR)/fs-persist-verify-iso
+FS_VERIFY_ISO := $(BUILD_DIR)/michael-oc-fs-verify-test.iso
 TIMEOUT := timeout
 
 BUILD_DIR := build
@@ -15,7 +21,7 @@ ISO := $(BUILD_DIR)/michael-oc.iso
 EXCEPTION_TEST_KERNEL := $(BUILD_DIR)/exception-test/kernel.elf
 EXCEPTION_TEST_ISO_DIR := $(BUILD_DIR)/exception-test-iso
 EXCEPTION_TEST_ISO := $(BUILD_DIR)/michael-oc-exception-test.iso
-OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/paging.o $(BUILD_DIR)/ata.o $(BUILD_DIR)/interrupts.o
+OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/paging.o $(BUILD_DIR)/ata.o $(BUILD_DIR)/fs.o $(BUILD_DIR)/interrupts.o
 
 CFLAGS := -m32 -std=gnu11 -O2 -Wall -Wextra -Werror \
 	-ffreestanding -fno-builtin -fno-pie -fno-pic \
@@ -24,7 +30,7 @@ ASFLAGS := -m32 -ffreestanding -fno-pie -fno-pic \
 	-fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables
 LDFLAGS := -m elf_i386 -T linker.ld -nostdlib
 
-.PHONY: all kernel iso run test test-exception clean check-tools
+.PHONY: all kernel iso run test test-exception test-fs-persistence clean check-tools
 
 all: check-tools iso
 
@@ -38,7 +44,7 @@ $(BUILD_DIR):
 $(BUILD_DIR)/boot.o: src/boot.S | $(BUILD_DIR)
 	$(CC) $(ASFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/kernel.o: src/kernel.c src/multiboot.h src/memory.h src/interrupts.h src/paging.h src/ata.h | $(BUILD_DIR)
+$(BUILD_DIR)/kernel.o: src/kernel.c src/multiboot.h src/memory.h src/interrupts.h src/paging.h src/ata.h src/fs.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/memory.o: src/memory.c src/memory.h src/multiboot.h | $(BUILD_DIR)
@@ -49,6 +55,15 @@ $(BUILD_DIR)/paging.o: src/paging.c src/paging.h src/memory.h src/multiboot.h | 
 
 $(BUILD_DIR)/ata.o: src/ata.c src/ata.h src/multiboot.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/fs.o: src/fs.c src/fs.h src/ata.h src/multiboot.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/kernel_fs_write.o: src/kernel.c src/multiboot.h src/memory.h src/interrupts.h src/paging.h src/ata.h src/fs.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DMICHAEL_OC_FS_PERSISTENCE_WRITE_TEST -c $< -o $@
+
+$(BUILD_DIR)/kernel_fs_verify.o: src/kernel.c src/multiboot.h src/memory.h src/interrupts.h src/paging.h src/ata.h src/fs.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DMICHAEL_OC_FS_PERSISTENCE_VERIFY_TEST -c $< -o $@
 
 $(BUILD_DIR)/interrupts_stubs.o: src/interrupts.S | $(BUILD_DIR)
 	$(CC) $(ASFLAGS) -c $< -o $@
@@ -72,9 +87,9 @@ $(ISO): $(KERNEL) grub/grub.cfg
 	cp grub/grub.cfg $(ISO_DIR)/boot/grub/grub.cfg
 	$(GRUB_MKRESCUE) -o $@ $(ISO_DIR)
 
-$(EXCEPTION_TEST_KERNEL): $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/paging.o $(BUILD_DIR)/ata.o $(BUILD_DIR)/interrupts_stubs.o $(BUILD_DIR)/interrupts_test_handler.o linker.ld
+$(EXCEPTION_TEST_KERNEL): $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/paging.o $(BUILD_DIR)/ata.o $(BUILD_DIR)/fs.o $(BUILD_DIR)/interrupts_stubs.o $(BUILD_DIR)/interrupts_test_handler.o linker.ld
 	mkdir -p $(@D)
-	$(LD) $(LDFLAGS) -o $@ $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/paging.o $(BUILD_DIR)/ata.o $(BUILD_DIR)/interrupts_stubs.o $(BUILD_DIR)/interrupts_test_handler.o
+	$(LD) $(LDFLAGS) -o $@ $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/paging.o $(BUILD_DIR)/ata.o $(BUILD_DIR)/fs.o $(BUILD_DIR)/interrupts_stubs.o $(BUILD_DIR)/interrupts_test_handler.o
 	$(GRUB_FILE) --is-x86-multiboot $@
 
 $(EXCEPTION_TEST_ISO): $(EXCEPTION_TEST_KERNEL) grub/exception-test.cfg
@@ -104,13 +119,51 @@ test: $(ISO) $(DISK_IMAGE)
 	@rm -f $(BUILD_DIR)/serial.log
 	@set +e; $(TIMEOUT) 5s $(QEMU) -m 128M -drive file=$(DISK_IMAGE),format=raw,if=ide,index=0 -cdrom $(ISO) -display none -monitor none -serial file:$(BUILD_DIR)/serial.log -no-reboot -no-shutdown; rc=$$?; set -e; \
 	if [ "$$rc" -ne 0 ] && [ "$$rc" -ne 124 ]; then echo "FAIL: QEMU exited with status $$rc"; cat $(BUILD_DIR)/serial.log 2>/dev/null || true; exit "$$rc"; fi; \
-	for marker in MICHAEL_OC_BOOT_OK MICHAEL_OC_IDT_OK MICHAEL_OC_PAGING_OK MICHAEL_OC_PAGING_TEST_OK MICHAEL_OC_PMM_OK MICHAEL_OC_ATA_OK MICHAEL_OC_ATA_TEST_OK MICHAEL_OC_MONO_TEST_OK MICHAEL_OC_INPUT_TEST_OK MICHAEL_OC_FB_OK MICHAEL_OC_PIC_REMAP_OK MICHAEL_OC_PIT_OK MICHAEL_OC_HARDWARE_IRQ_OK MICHAEL_OC_KEYBOARD_IRQ_OK MICHAEL_OC_PIT_TICK_OK; do \
+	for marker in MICHAEL_OC_BOOT_OK MICHAEL_OC_IDT_OK MICHAEL_OC_PAGING_OK MICHAEL_OC_PAGING_TEST_OK MICHAEL_OC_PMM_OK MICHAEL_OC_ATA_OK MICHAEL_OC_ATA_TEST_OK MICHAEL_OC_FS_READY MICHAEL_OC_MONO_TEST_OK MICHAEL_OC_INPUT_TEST_OK MICHAEL_OC_FB_OK MICHAEL_OC_PIC_REMAP_OK MICHAEL_OC_PIT_OK MICHAEL_OC_HARDWARE_IRQ_OK MICHAEL_OC_KEYBOARD_IRQ_OK MICHAEL_OC_PIT_TICK_OK; do \
 		if ! grep -q "$$marker" $(BUILD_DIR)/serial.log; then echo "FAIL: missing $$marker"; cat $(BUILD_DIR)/serial.log 2>/dev/null || true; exit 1; fi; \
 	done; \
 	echo "PASS: normal kernel boot, IDT setup, physical-memory allocator, 1-bit canvas, UI input logic, framebuffer output, and interrupt-driven keyboard startup."
 
 	python3 scripts/test_keyboard_input.py --qemu $(QEMU) --iso $(ISO) --disk $(DISK_IMAGE) --work-dir $(BUILD_DIR)
 	$(MAKE) test-exception
+	$(MAKE) test-fs-persistence
+
+
+$(FS_WRITE_KERNEL): $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel_fs_write.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/paging.o $(BUILD_DIR)/ata.o $(BUILD_DIR)/fs.o $(BUILD_DIR)/interrupts.o linker.ld
+	mkdir -p $(@D)
+	$(LD) $(LDFLAGS) -o $@ $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel_fs_write.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/paging.o $(BUILD_DIR)/ata.o $(BUILD_DIR)/fs.o $(BUILD_DIR)/interrupts.o
+	$(GRUB_FILE) --is-x86-multiboot $@
+
+$(FS_WRITE_ISO): $(FS_WRITE_KERNEL) grub/grub.cfg
+	mkdir -p $(FS_WRITE_ISO_DIR)/boot/grub
+	cp $(FS_WRITE_KERNEL) $(FS_WRITE_ISO_DIR)/boot/kernel.elf
+	cp grub/grub.cfg $(FS_WRITE_ISO_DIR)/boot/grub/grub.cfg
+	$(GRUB_MKRESCUE) -o $@ $(FS_WRITE_ISO_DIR)
+
+$(FS_VERIFY_KERNEL): $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel_fs_verify.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/paging.o $(BUILD_DIR)/ata.o $(BUILD_DIR)/fs.o $(BUILD_DIR)/interrupts.o linker.ld
+	mkdir -p $(@D)
+	$(LD) $(LDFLAGS) -o $@ $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel_fs_verify.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/paging.o $(BUILD_DIR)/ata.o $(BUILD_DIR)/fs.o $(BUILD_DIR)/interrupts.o
+	$(GRUB_FILE) --is-x86-multiboot $@
+
+$(FS_VERIFY_ISO): $(FS_VERIFY_KERNEL) grub/grub.cfg
+	mkdir -p $(FS_VERIFY_ISO_DIR)/boot/grub
+	cp $(FS_VERIFY_KERNEL) $(FS_VERIFY_ISO_DIR)/boot/kernel.elf
+	cp grub/grub.cfg $(FS_VERIFY_ISO_DIR)/boot/grub/grub.cfg
+	$(GRUB_MKRESCUE) -o $@ $(FS_VERIFY_ISO_DIR)
+
+test-fs-persistence: $(FS_WRITE_ISO) $(FS_VERIFY_ISO) $(DISK_IMAGE)
+	@rm -f $(BUILD_DIR)/serial-fs-write.log $(BUILD_DIR)/serial-fs-verify.log
+	@set +e; $(TIMEOUT) 3s $(QEMU) -m 128M -drive file=$(DISK_IMAGE),format=raw,if=ide,index=0 -cdrom $(FS_WRITE_ISO) -display none -monitor none -serial file:$(BUILD_DIR)/serial-fs-write.log -no-reboot -no-shutdown; rc=$$?; set -e; \
+	if [ "$$rc" -ne 124 ]; then echo "FAIL: FS write VM returned $$rc"; cat $(BUILD_DIR)/serial-fs-write.log 2>/dev/null || true; exit 1; fi; \
+	for marker in MICHAEL_OC_ATA_OK MICHAEL_OC_FS_READY MICHAEL_OC_FS_PERSIST_WRITE_OK; do \
+		if ! grep -q "$$marker" $(BUILD_DIR)/serial-fs-write.log; then echo "FAIL: FS write test missing $$marker"; cat $(BUILD_DIR)/serial-fs-write.log 2>/dev/null || true; exit 1; fi; \
+	done
+	@set +e; $(TIMEOUT) 3s $(QEMU) -m 128M -drive file=$(DISK_IMAGE),format=raw,if=ide,index=0 -cdrom $(FS_VERIFY_ISO) -display none -monitor none -serial file:$(BUILD_DIR)/serial-fs-verify.log -no-reboot -no-shutdown; rc=$$?; set -e; \
+	if [ "$$rc" -ne 124 ]; then echo "FAIL: FS verify VM returned $$rc"; cat $(BUILD_DIR)/serial-fs-verify.log 2>/dev/null || true; exit 1; fi; \
+	for marker in MICHAEL_OC_ATA_OK MICHAEL_OC_FS_READY MICHAEL_OC_FS_PERSIST_VERIFY_OK; do \
+		if ! grep -q "$$marker" $(BUILD_DIR)/serial-fs-verify.log; then echo "FAIL: FS verify test missing $$marker"; cat $(BUILD_DIR)/serial-fs-verify.log 2>/dev/null || true; exit 1; fi; \
+	done
+	@echo "PASS: filesystem data survived a full QEMU shutdown and a second kernel boot."
 
 test-exception: $(EXCEPTION_TEST_ISO)
 	@command -v $(QEMU) >/dev/null || { echo "Missing $(QEMU); install qemu-system-x86"; exit 1; }

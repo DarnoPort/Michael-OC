@@ -11,6 +11,7 @@
 #include "interrupts.h"
 #include "paging.h"
 #include "ata.h"
+#include "fs.h"
 
 #define VGA_WIDTH  80u
 #define VGA_HEIGHT 25u
@@ -796,6 +797,7 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
         serial_write("MICHAEL_OC_PAGING_TEST_SKIPPED\r\n");
     }
 
+    int filesystem_ready = 0;
     if (ata_init()) {
         serial_write("MICHAEL_OC_ATA_OK\r\n");
         if (ata_self_test()) {
@@ -803,9 +805,62 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
         } else {
             serial_write("MICHAEL_OC_ATA_TEST_FAILED\r\n");
         }
+
+        if (fs_init()) {
+            filesystem_ready = 1;
+            serial_write("MICHAEL_OC_FS_READY\r\n");
+        } else {
+            serial_write("MICHAEL_OC_FS_FAILED\r\n");
+        }
     } else {
         serial_write("MICHAEL_OC_ATA_UNAVAILABLE\r\n");
     }
+
+#ifdef MICHAEL_OC_FS_PERSISTENCE_WRITE_TEST
+    if (!filesystem_ready) {
+        serial_write("MICHAEL_OC_FS_PERSIST_WRITE_FAILED\r\n");
+        halt_forever();
+    }
+    {
+        static const u8 payload[] = {
+            'M','I','C','H','A','E','L','_','O','C','_',
+            'P','E','R','S','I','S','T','E','N','C','E','_','V','1','\n'
+        };
+        u8 verify[sizeof(payload)];
+        u32 bytes_read = 0u;
+        (void)fs_remove("/.ci-persistence");
+        const int ok = fs_create("/.ci-persistence", FS_TYPE_FILE) &&
+            fs_write("/.ci-persistence", 0u, payload, (u32)sizeof(payload)) &&
+            fs_read("/.ci-persistence", 0u, verify, (u32)sizeof(verify), &bytes_read) &&
+            bytes_read == (u32)sizeof(payload) &&
+            bytes_equal(payload, verify, (u32)sizeof(payload));
+        if (ok) serial_write("MICHAEL_OC_FS_PERSIST_WRITE_OK\r\n");
+        else serial_write("MICHAEL_OC_FS_PERSIST_WRITE_FAILED\r\n");
+    }
+    halt_forever();
+#endif
+
+#ifdef MICHAEL_OC_FS_PERSISTENCE_VERIFY_TEST
+    if (!filesystem_ready) {
+        serial_write("MICHAEL_OC_FS_PERSIST_VERIFY_FAILED\r\n");
+        halt_forever();
+    }
+    {
+        static const u8 expected[] = {
+            'M','I','C','H','A','E','L','_','O','C','_',
+            'P','E','R','S','I','S','T','E','N','C','E','_','V','1','\n'
+        };
+        u8 verify[sizeof(expected)];
+        u32 bytes_read = 0u;
+        const int ok = fs_read("/.ci-persistence", 0u, verify,
+                               (u32)sizeof(verify), &bytes_read) &&
+            bytes_read == (u32)sizeof(expected) &&
+            bytes_equal(expected, verify, (u32)sizeof(expected));
+        if (ok) serial_write("MICHAEL_OC_FS_PERSIST_VERIFY_OK\r\n");
+        else serial_write("MICHAEL_OC_FS_PERSIST_VERIFY_FAILED\r\n");
+    }
+    halt_forever();
+#endif
 
     if (!initialize_graphics(multiboot_info)) {
         serial_write("MICHAEL_OC_FB_UNAVAILABLE\r\n");
