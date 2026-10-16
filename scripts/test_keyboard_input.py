@@ -55,6 +55,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--qemu", required=True)
     parser.add_argument("--iso", required=True)
+    parser.add_argument("--disk", required=True)
     parser.add_argument("--work-dir", required=True)
     args = parser.parse_args()
 
@@ -72,6 +73,7 @@ def main() -> int:
         args.qemu,
         "-m", "128M",
         "-cdrom", args.iso,
+        "-hda", args.disk,
         "-display", "none",
         "-serial", f"file:{serial_log}",
         "-monitor", f"unix:{monitor_path},server,nowait",
@@ -82,7 +84,7 @@ def main() -> int:
     process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     monitor = None
     try:
-        wait_for_marker(serial_log, "MICHAEL_OC_KEYBOARD_IRQ_OK", process, 10.0)
+        wait_for_marker(serial_log, "MICHAEL_OC_KEYBOARD_EVENT_LOOP_OK", process, 10.0)
 
         deadline = time.monotonic() + 5.0
         while not monitor_path.exists() and time.monotonic() < deadline:
