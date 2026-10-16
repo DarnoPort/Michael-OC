@@ -48,7 +48,7 @@
 Install dependencies on Ubuntu:
 
     sudo apt update
-    sudo apt install build-essential gcc-multilib grub-pc-bin xorriso qemu-system-x86 make
+    sudo apt install build-essential gcc-multilib grub-pc-bin xorriso mtools qemu-system-x86 make
 
 Then run:
 
@@ -59,16 +59,25 @@ Then run:
 
 The ISO should be generated at build/michael-oc.iso.
 
+## Last verification attempt
+
+- Source compilation passed in GitHub Actions.
+- The GRUB Multiboot header check passed.
+- ISO creation failed because the runner did not have mtools/mformat installed.
+- CI and build instructions have been updated to install and check mtools.
+- QEMU boot test has not yet run successfully and remains unverified.
+
 ## Next implementation tasks
 
-1. Get the bootstrap build and CI smoke test passing; fix actual compiler, GRUB, linker, or QEMU failures if reported.
-2. Add a graphics mode/framebuffer boot request and a packed 1-bit software framebuffer, plus tests that ensure framebuffer writes map only to black and white.
-3. Add PS/2 keyboard input and a simple interactive command shell for early diagnostics.
-4. Add memory-map parsing and a physical page/frame allocator; add exception/interrupt handling.
-5. Add a block-device abstraction and persistent storage in a QEMU disk image; choose or implement a documented filesystem.
-6. Define a stable kernel service ABI and executable format/loader before writing user applications.
-7. Add a desktop/window model and real applications in incremental, tested steps.
-8. Add installation/removal for external applications and document the developer workflow.
+1. Confirm ISO creation and the headless QEMU boot test pass with the corrected dependencies.
+2. Address the linker warning about the kernel load segment being both writable and executable, preferably by introducing explicit RX and RW program headers without breaking the Multiboot header.
+3. Add a graphics mode/framebuffer boot request and a packed 1-bit software framebuffer, plus tests that ensure framebuffer writes map only to black and white.
+4. Add PS/2 keyboard input and a simple interactive command shell for early diagnostics.
+5. Add memory-map parsing and a physical page/frame allocator; add exception/interrupt handling.
+6. Add a block-device abstraction and persistent storage in a QEMU disk image; choose or implement a documented filesystem.
+7. Define a stable kernel service ABI and executable format/loader before writing user applications.
+8. Add a desktop/window model and real applications in incremental, tested steps.
+9. Add installation/removal for external applications and document the developer workflow.
 
 ## Verification honesty
 
