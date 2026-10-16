@@ -6,13 +6,8 @@
  * black or full white. VGA text mode remains a diagnostic fallback.
  */
 
-typedef unsigned char      u8;
-typedef unsigned short     u16;
-typedef unsigned int       u32;
-typedef unsigned long long u64;
-
-#define MULTIBOOT_BOOTLOADER_MAGIC 0x2BADB002u
-#define MULTIBOOT_INFO_FRAMEBUFFER (1u << 12)
+#include "multiboot.h"
+#include "memory.h"
 
 #define VGA_WIDTH  80u
 #define VGA_HEIGHT 25u
@@ -23,44 +18,6 @@ typedef unsigned long long u64;
 #define MONO_WIDTH 800u
 #define MONO_HEIGHT 600u
 #define MONO_BUFFER_BYTES ((MONO_WIDTH * MONO_HEIGHT + 7u) / 8u)
-
-typedef struct __attribute__((packed)) {
-    u32 flags;
-    u32 mem_lower;
-    u32 mem_upper;
-    u32 boot_device;
-    u32 cmdline;
-    u32 mods_count;
-    u32 mods_addr;
-    u32 symbols[4];
-    u32 mmap_length;
-    u32 mmap_addr;
-    u32 drives_length;
-    u32 drives_addr;
-    u32 config_table;
-    u32 boot_loader_name;
-    u32 apm_table;
-    u32 vbe_control_info;
-    u32 vbe_mode_info;
-    u16 vbe_mode;
-    u16 vbe_interface_seg;
-    u16 vbe_interface_off;
-    u16 vbe_interface_len;
-    u64 framebuffer_addr;
-    u32 framebuffer_pitch;
-    u32 framebuffer_width;
-    u32 framebuffer_height;
-    u8 framebuffer_bpp;
-    u8 framebuffer_type;
-    struct __attribute__((packed)) {
-        u8 red_field_position;
-        u8 red_mask_size;
-        u8 green_field_position;
-        u8 green_mask_size;
-        u8 blue_field_position;
-        u8 blue_mask_size;
-    } color;
-} multiboot_info_t;
 
 static u8 mono_buffer[MONO_BUFFER_BYTES];
 static u32 canvas_width;
@@ -452,6 +409,9 @@ static void draw_system_screen(void)
     mono_draw_text(80u, 322u, "CANVAS: 1 BIT / PIXEL", 2u, 0);
     mono_draw_text(80u, 370u, "DISPLAY: BLACK / WHITE", 2u, 0);
     mono_draw_text(80u, 418u, "INPUT: PS/2 POLLING", 2u, 0);
+    mono_draw_text(80u, 454u, pmm_is_initialized() ? "PMM: READY" : "PMM: NOT READY", 2u, 0);
+    mono_draw_text(80u, 490u, "FREE PAGES:", 1u, 0);
+    mono_draw_uint(170u, 490u, pmm_free_page_count(), 1u);
 }
 
 static void draw_keyboard_screen(void)
@@ -806,6 +766,12 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
     }
 
     serial_write("MICHAEL_OC_BOOT_OK\r\n");
+
+    if (pmm_init((const multiboot_info_t *)multiboot_info) && pmm_self_test()) {
+        serial_write("MICHAEL_OC_PMM_OK\r\n");
+    } else {
+        serial_write("MICHAEL_OC_PMM_FAIL\r\n");
+    }
 
     if (!initialize_graphics(multiboot_info)) {
         serial_write("MICHAEL_OC_FB_UNAVAILABLE\r\n");
