@@ -475,7 +475,7 @@ static void draw_system_screen(void)
     mono_draw_text(80u, 454u, pmm_is_initialized() ? "PMM: READY" : "PMM: NOT READY", 2u, 0);
     mono_draw_text(250u, 454u, "PIT: 100 HZ", 1u, 0);
     mono_draw_text(80u, 475u, "UPTIME SEC:", 1u, 0);
-    mono_draw_uint(150u, 475u, timer_ticks() / PIT_TICK_HZ, 1u);
+    mono_draw_uint(150u, 475u, timer_ticks() / 100u, 1u);
     mono_draw_text(80u, 490u, "FREE PAGES:", 1u, 0);
     mono_draw_text(80u, 515u, fs_is_mounted() ? "FS: MOCFS1 READY" : "FS: UNAVAILABLE", 1u, 0);
     mono_draw_uint(170u, 490u, pmm_free_page_count(), 1u);
