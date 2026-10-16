@@ -837,19 +837,27 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
             'P','E','R','S','I','S','T','E','N','C','E','_','V','1','\n'
         };
         u8 verify[sizeof(payload)];
-        u32 bytes_read = 0u;
-        (void)fs_remove("/.ci-persistence");
-        const int ok = fs_create("/.ci-persistence", FS_TYPE_FILE) &&
-            fs_write("/.ci-persistence", 0u, payload, (u32)sizeof(payload)) &&
-            fs_read("/.ci-persistence", 0u, verify, (u32)sizeof(verify), &bytes_read) &&
-            bytes_read == (u32)sizeof(payload) &&
-            persistence_bytes_equal(payload, verify, (u32)sizeof(payload));
+        fs_dir_entry_t entries[4];
+        u32 bytes_read = 0u, entry_count = 0u;
+        (void)fs_remove("/.ci-fs-test/persist.bin");
+        (void)fs_remove("/.ci-fs-test");
+        int ok = fs_create("/.ci-fs-test", FS_TYPE_DIRECTORY) &&
+                 fs_create("/.ci-fs-test/persist.bin", FS_TYPE_FILE) &&
+                 fs_write("/.ci-fs-test/persist.bin", 0u, payload,
+                          (u32)sizeof(payload)) &&
+                 fs_read("/.ci-fs-test/persist.bin", 0u, verify,
+                         (u32)sizeof(verify), &bytes_read) &&
+                 bytes_read == (u32)sizeof(payload) &&
+                 persistence_bytes_equal(payload, verify, (u32)sizeof(payload)) &&
+                 fs_list("/.ci-fs-test", entries, 4u, &entry_count) &&
+                 entry_count == 1u &&
+                 string_equals(entries[0].name, "persist.bin") &&
+                 entries[0].type == FS_TYPE_FILE;
         if (ok) serial_write("MICHAEL_OC_FS_PERSIST_WRITE_OK\r\n");
         else serial_write("MICHAEL_OC_FS_PERSIST_WRITE_FAILED\r\n");
     }
     halt_forever();
 #endif
-
 #ifdef MICHAEL_OC_FS_PERSISTENCE_VERIFY_TEST
     if (!filesystem_ready) {
         serial_write("MICHAEL_OC_FS_PERSIST_VERIFY_FAILED\r\n");
@@ -861,17 +869,25 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
             'P','E','R','S','I','S','T','E','N','C','E','_','V','1','\n'
         };
         u8 verify[sizeof(expected)];
-        u32 bytes_read = 0u;
-        const int ok = fs_read("/.ci-persistence", 0u, verify,
-                               (u32)sizeof(verify), &bytes_read) &&
+        u8 node_type = 0u;
+        u32 bytes_read = 0u, size = 0u;
+        const int data_ok = fs_read("/.ci-fs-test/persist.bin", 0u, verify,
+                                    (u32)sizeof(verify), &bytes_read) &&
             bytes_read == (u32)sizeof(expected) &&
             persistence_bytes_equal(expected, verify, (u32)sizeof(expected));
-        if (ok) serial_write("MICHAEL_OC_FS_PERSIST_VERIFY_OK\r\n");
-        else serial_write("MICHAEL_OC_FS_PERSIST_VERIFY_FAILED\r\n");
+        const int dir_ok = fs_exists("/.ci-fs-test", &node_type, &size) &&
+                           node_type == FS_TYPE_DIRECTORY;
+        const int cleanup_ok = data_ok &&
+            fs_remove("/.ci-fs-test/persist.bin") &&
+            fs_remove("/.ci-fs-test");
+        if (data_ok && dir_ok && cleanup_ok) {
+            serial_write("MICHAEL_OC_FS_PERSIST_VERIFY_OK\r\n");
+        } else {
+            serial_write("MICHAEL_OC_FS_PERSIST_VERIFY_FAILED\r\n");
+        }
     }
     halt_forever();
 #endif
-
     (void)filesystem_ready;
 
     if (!initialize_graphics(multiboot_info)) {

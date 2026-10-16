@@ -67,24 +67,6 @@ static void ata_delay_400ns(void)
     (void)inb(ATA_ALT_STATUS_CONTROL);
 }
 
-static int ata_wait_not_busy(void)
-{
-    for (u32 i = 0u; i < ATA_WAIT_LIMIT; ++i) {
-        const u8 status = inb(ATA_STATUS_COMMAND);
-        if (status == 0u || status == 0xFFu) {
-            return 0;
-        }
-        if ((status & ATA_STATUS_BSY) != 0u) {
-            continue;
-        }
-        if ((status & (ATA_STATUS_ERR | ATA_STATUS_DF)) != 0u) {
-            return 0;
-        }
-        return 1;
-    }
-    return 0;
-}
-
 static int ata_wait_data_request(void)
 {
     for (u32 i = 0u; i < ATA_WAIT_LIMIT; ++i) {
