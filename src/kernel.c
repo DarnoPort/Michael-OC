@@ -771,6 +771,7 @@ static int persistence_bytes_equal(const u8 *a, const u8 *b, u32 size)
     return 1;
 }
 
+#ifdef MICHAEL_OC_FS_PERSISTENCE_WRITE_TEST
 static int persistence_string_equal(const char *a, const char *b)
 {
     u32 i = 0u;
@@ -780,6 +781,7 @@ static int persistence_string_equal(const char *a, const char *b)
     }
     return a[i] == '\0' && b[i] == '\0';
 }
+#endif
 #endif
 
 void kernel_main(u32 multiboot_magic, u32 multiboot_info)
