@@ -797,14 +797,14 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
     }
 
     if (ata_init()) {
-        serial_write("MICHAEL_OC_ATA_OK\\r\\n");
+        serial_write("MICHAEL_OC_ATA_OK\r\n");
         if (ata_self_test()) {
-            serial_write("MICHAEL_OC_ATA_TEST_OK\\r\\n");
+            serial_write("MICHAEL_OC_ATA_TEST_OK\r\n");
         } else {
-            serial_write("MICHAEL_OC_ATA_TEST_FAILED\\r\\n");
+            serial_write("MICHAEL_OC_ATA_TEST_FAILED\r\n");
         }
     } else {
-        serial_write("MICHAEL_OC_ATA_UNAVAILABLE\\r\\n");
+        serial_write("MICHAEL_OC_ATA_UNAVAILABLE\r\n");
     }
 
     if (!initialize_graphics(multiboot_info)) {
