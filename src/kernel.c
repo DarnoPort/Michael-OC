@@ -442,14 +442,50 @@ static int initialize_graphics(u32 multiboot_info_address)
         return 0;
     }
 
-    const u32 red_mask = channel_mask(info->color.red_field_position,
-                                      info->color.red_mask_size, (u8)bpp);
-    const u32 green_mask = channel_mask(info->color.green_field_position,
-                                        info->color.green_mask_size, (u8)bpp);
-    const u32 blue_mask = channel_mask(info->color.blue_field_position,
-                                       info->color.blue_mask_size, (u8)bpp);
-    if (red_mask == 0u || green_mask == 0u || blue_mask == 0u) {
-        return 0;
+    u32 red_mask = channel_mask(info->color.red_field_position,
+                                  info->color.red_mask_size, (u8)bpp);
+    u32 green_mask = channel_mask(info->color.green_field_position,
+                                  info->color.green_mask_size, (u8)bpp);
+    u32 blue_mask = channel_mask(info->color.blue_field_position,
+                                 info->color.blue_mask_size, (u8)bpp);
+
+    const int standard_masks_valid =
+        red_mask != 0u && green_mask != 0u && blue_mask != 0u &&
+        (red_mask & green_mask) == 0u &&
+        (red_mask & blue_mask) == 0u &&
+        (green_mask & blue_mask) == 0u;
+
+    if (!standard_masks_valid) {
+        /*
+         * The GRUB 2.12 QEMU hand-off observed during bring-up aligns the
+         * RGB union to four bytes, leaving two zero bytes after framebuffer
+         * type. Multiboot describes RGB bytes at offsets 110..115; tolerate
+         * the aligned form at 112..117 only when the standard interpretation
+         * is invalid. Both interpretations are range-checked and must not
+         * contain overlapping channels.
+         */
+        const u8 *aligned_rgb = (const u8 *)info + 112u;
+        const u32 alt_red = channel_mask(aligned_rgb[0], aligned_rgb[1], (u8)bpp);
+        const u32 alt_green = channel_mask(aligned_rgb[2], aligned_rgb[3], (u8)bpp);
+        const u32 alt_blue = channel_mask(aligned_rgb[4], aligned_rgb[5], (u8)bpp);
+
+        const int aligned_masks_valid =
+            alt_red != 0u && alt_green != 0u && alt_blue != 0u &&
+            (alt_red & alt_green) == 0u &&
+            (alt_red & alt_blue) == 0u &&
+            (alt_green & alt_blue) == 0u;
+
+        if (!aligned_masks_valid) {
+            serial_write("FB_DIAG_INVALID_RGB_MASKS\\r\\n");
+            return 0;
+        }
+
+        red_mask = alt_red;
+        green_mask = alt_green;
+        blue_mask = alt_blue;
+        serial_write("FB_COLOR_LAYOUT_ALIGNED\\r\\n");
+    } else {
+        serial_write("FB_COLOR_LAYOUT_STANDARD\\r\\n");
     }
 
     const u32 white_pixel = red_mask | green_mask | blue_mask;
