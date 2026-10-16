@@ -93,7 +93,7 @@ test: $(ISO)
 	@rm -f $(BUILD_DIR)/serial.log
 	@set +e; $(TIMEOUT) 5s $(QEMU) -m 128M -cdrom $(ISO) -display none -monitor none -serial file:$(BUILD_DIR)/serial.log -no-reboot -no-shutdown; rc=$$?; set -e; \
 	if [ "$$rc" -ne 0 ] && [ "$$rc" -ne 124 ]; then echo "FAIL: QEMU exited with status $$rc"; cat $(BUILD_DIR)/serial.log 2>/dev/null || true; exit "$$rc"; fi; \
-	for marker in MICHAEL_OC_BOOT_OK MICHAEL_OC_IDT_OK MICHAEL_OC_PMM_OK MICHAEL_OC_MONO_TEST_OK MICHAEL_OC_INPUT_TEST_OK MICHAEL_OC_FB_OK MICHAEL_OC_PIC_REMAP_OK MICHAEL_OC_KEYBOARD_IRQ_OK; do \
+	for marker in MICHAEL_OC_BOOT_OK MICHAEL_OC_IDT_OK MICHAEL_OC_PMM_OK MICHAEL_OC_MONO_TEST_OK MICHAEL_OC_INPUT_TEST_OK MICHAEL_OC_FB_OK MICHAEL_OC_PIC_REMAP_OK MICHAEL_OC_PIT_OK MICHAEL_OC_HARDWARE_IRQ_OK MICHAEL_OC_KEYBOARD_IRQ_OK MICHAEL_OC_PIT_TICK_OK; do \
 		if ! grep -q "$$marker" $(BUILD_DIR)/serial.log; then echo "FAIL: missing $$marker"; cat $(BUILD_DIR)/serial.log 2>/dev/null || true; exit 1; fi; \
 	done; \
 	echo "PASS: normal kernel boot, IDT setup, physical-memory allocator, 1-bit canvas, UI input logic, framebuffer output, and interrupt-driven keyboard startup."

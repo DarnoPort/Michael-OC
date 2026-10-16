@@ -413,6 +413,8 @@ static void draw_system_screen(void)
     mono_draw_text(80u, 454u, pmm_is_initialized() ? "PMM: READY" : "PMM: NOT READY", 2u, 0);
     mono_draw_text(80u, 490u, "FREE PAGES:", 1u, 0);
     mono_draw_uint(170u, 490u, pmm_free_page_count(), 1u);
+    mono_draw_text(80u, 508u, "TIMER TICKS:", 1u, 0);
+    mono_draw_uint(155u, 508u, interrupts_timer_ticks(), 1u);
 }
 
 static void draw_keyboard_screen(void)
@@ -703,12 +705,17 @@ static void log_ui_screen_event(void)
 
 static void keyboard_irq_loop(void)
 {
-    if (!interrupts_enable_keyboard_irq()) {
+    if (!interrupts_enable_timer_keyboard_irqs()) {
         serial_write("MICHAEL_OC_KEYBOARD_IRQ_FATAL\r\n");
         halt_forever();
     }
 
+    int tick_marker_emitted = 0;
     for (;;) {
+        if (!tick_marker_emitted && interrupts_timer_ticks() >= 3u) {
+            serial_write("MICHAEL_OC_PIT_TICK_OK\\r\\n");
+            tick_marker_emitted = 1;
+        }
         u8 scancode;
 
         /*

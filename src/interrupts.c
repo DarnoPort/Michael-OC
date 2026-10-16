@@ -19,6 +19,9 @@
 #define PIC_EOI 0x20u
 #define PS2_DATA 0x60u
 #define PS2_STATUS_COMMAND 0x64u
+#define PIT_CHANNEL0_DATA 0x40u
+#define PIT_COMMAND 0x43u
+#define PIT_FREQUENCY_HZ 100u
 #define KEYBOARD_IRQ 1u
 #define SCANCODE_QUEUE_SIZE 128u
 #define SCANCODE_QUEUE_MASK (SCANCODE_QUEUE_SIZE - 1u)
@@ -57,6 +60,7 @@ static idtr_t idtr;
 static volatile u8 scancode_queue[SCANCODE_QUEUE_SIZE];
 static volatile u8 scancode_head;
 static volatile u8 scancode_tail;
+static volatile u32 pit_tick_count;
 
 extern u32 isr_stub_table[IDT_ENTRIES];
 
@@ -208,19 +212,32 @@ static __attribute__((noreturn)) void stop_with_init_error(const char *message)
     }
 }
 
-int interrupts_enable_keyboard_irq(void)
+int interrupts_enable_timer_keyboard_irqs(void)
 {
     if (!ps2_enable_keyboard_irq()) {
         serial_write("MICHAEL_OC_KEYBOARD_IRQ_FAILED: PS/2 controller timeout\r\n");
         return 0;
     }
 
-    /* Unmask only IRQ1; every other device stays masked until it has a driver. */
-    outb(PIC_MASTER_DATA, 0xFDu);
+    /* Program PIT channel 0 to ~100 Hz before unmasking the timer line. */
+    const u16 divisor = (u16)(1193182u / PIT_FREQUENCY_HZ);
+    outb(PIT_COMMAND, 0x36u);
+    outb(PIT_CHANNEL0_DATA, (u8)(divisor & 0xFFu));
+    outb(PIT_CHANNEL0_DATA, (u8)(divisor >> 8));
+    serial_write("MICHAEL_OC_PIT_OK\\r\\n");
+
+    /* Only the timer and keyboard IRQs are enabled; all others stay masked. */
+    outb(PIC_MASTER_DATA, 0xFCu);
     outb(PIC_SLAVE_DATA, 0xFFu);
     __asm__ volatile ("sti" : : : "memory");
-    serial_write("MICHAEL_OC_KEYBOARD_IRQ_OK\r\n");
+    serial_write("MICHAEL_OC_HARDWARE_IRQ_OK\\r\\n");
+    serial_write("MICHAEL_OC_KEYBOARD_IRQ_OK\\r\\n");
     return 1;
+}
+
+u32 interrupts_timer_ticks(void)
+{
+    return pit_tick_count;
 }
 
 void interrupts_init(void)
@@ -263,6 +280,7 @@ void interrupts_init(void)
     pic_remap_and_mask();
     scancode_head = 0u;
     scancode_tail = 0u;
+    pit_tick_count = 0u;
 
     serial_write("MICHAEL_OC_IDT_OK\r\n");
     serial_write("MICHAEL_OC_PIC_REMAP_OK\r\n");
@@ -302,7 +320,9 @@ void interrupt_dispatch(const interrupt_frame_t *frame)
 
     if (frame->vector >= IRQ_BASE && frame->vector < IRQ_BASE + IRQ_COUNT) {
         const u32 irq = frame->vector - IRQ_BASE;
-        if (irq == KEYBOARD_IRQ) {
+        if (irq == 0u) {
+            ++pit_tick_count;
+        } else if (irq == KEYBOARD_IRQ) {
             const u8 status = inb(PS2_STATUS_COMMAND);
             if ((status & 0x01u) != 0u) {
                 const u8 value = inb(PS2_DATA);
