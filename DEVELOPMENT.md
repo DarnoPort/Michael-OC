@@ -86,3 +86,9 @@ A source file or successful compile is not proof of runtime correctness. Track b
 ## External MOCApp installation
 
 A host-side installer now places a .mapp source file into the root of an existing MOCFS1 disk image without rebuilding the kernel ISO. It validates filesystem geometry, metadata relationships, extents, file-name rules, and the interpreter's size/line constraints. The operation edits a temporary copy and replaces the image only after a complete successful write. A standalone test checks the on-disk entry/data, duplicate-name rejection, oversized-source rejection, and unchanged image bytes after rejected operations. The QEMU app workflow installs another app after the ISO has already been built and then launches it from the guest file manager. This milestone remains pending until the latest CI run passes.
+
+## Paging implementation (latest change pending CI)
+
+A 4 KiB page-table implementation has been added. It identity-maps the 32-bit address space to preserve the current direct-physical-pointer convention, unmaps the null page, makes the linked kernel text/rodata region read-only, enables CR0.WP, and marks the Multiboot framebuffer with write-through/cache-disable flags. The boot self-test verifies page-zero absence, kernel text permissions, writable kernel data, temporary virtual-to-physical remapping, unmapping, translation failure after unmap, identity-map restoration, and no leaked physical frame.
+
+This is not per-process virtual memory or userspace isolation. The initial mapping remains a single global supervisor address space, with most addresses writable. Latest CI must pass before this milestone is marked verified.

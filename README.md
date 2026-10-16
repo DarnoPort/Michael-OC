@@ -67,3 +67,9 @@ Shut down QEMU before changing its disk image. Then use the host-side installer 
     make run
 
 The installer validates MOCFS1 metadata and script limits, rejects duplicate root names instead of overwriting files, and atomically replaces the image file after writing the script, bitmap, and directory entry. It changes the virtual disk only; the kernel and bootable ISO are not rebuilt. The tool supports this project's MOCFS1 disk-image format, not arbitrary FAT/NTFS disks.
+
+## Paging milestone
+
+The kernel now enables 32-bit 4 KiB page tables with a supervisor-only identity map, leaves virtual page zero absent, enables the CPU write-protect bit, maps kernel text and read-only data without write permission, and marks the Multiboot framebuffer as uncached. A boot-time self-test checks those permissions, maps a scratch virtual page to an allocated physical frame, verifies read/write access, unmaps it, confirms translation is absent, restores the identity mapping, and checks that the frame allocator's free-page count is unchanged.
+
+This is a kernel-memory foundation, not userspace isolation. The current map still identity-maps most physical addresses as writable supervisor pages. User-mode address spaces, demand paging, page reclamation, page-fault recovery, and per-process page tables remain unimplemented.

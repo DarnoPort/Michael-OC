@@ -20,9 +20,9 @@ EXCEPTION_TEST_DIR := $(BUILD_DIR)/exception-test
 EXCEPTION_TEST_ISO_DIR := $(EXCEPTION_TEST_DIR)/iso
 EXCEPTION_TEST_KERNEL := $(EXCEPTION_TEST_DIR)/kernel.elf
 EXCEPTION_TEST_ISO := $(EXCEPTION_TEST_DIR)/michael-oc-exception-test.iso
-EXCEPTION_TEST_OBJECTS := $(EXCEPTION_TEST_DIR)/boot.o $(EXCEPTION_TEST_DIR)/kernel.o $(EXCEPTION_TEST_DIR)/memory.o $(EXCEPTION_TEST_DIR)/interrupts.o $(EXCEPTION_TEST_DIR)/isr_stubs.o $(EXCEPTION_TEST_DIR)/disk.o $(EXCEPTION_TEST_DIR)/fs.o
-STORAGE_TEST_OBJECTS := $(STORAGE_TEST_DIR)/boot.o $(STORAGE_TEST_DIR)/kernel.o $(STORAGE_TEST_DIR)/memory.o $(STORAGE_TEST_DIR)/interrupts.o $(STORAGE_TEST_DIR)/isr_stubs.o $(STORAGE_TEST_DIR)/disk.o $(STORAGE_TEST_DIR)/fs.o
-OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/interrupts.o $(BUILD_DIR)/isr_stubs.o $(BUILD_DIR)/disk.o $(BUILD_DIR)/fs.o
+EXCEPTION_TEST_OBJECTS := $(EXCEPTION_TEST_DIR)/boot.o $(EXCEPTION_TEST_DIR)/kernel.o $(EXCEPTION_TEST_DIR)/memory.o $(EXCEPTION_TEST_DIR)/interrupts.o $(EXCEPTION_TEST_DIR)/isr_stubs.o $(EXCEPTION_TEST_DIR)/disk.o $(EXCEPTION_TEST_DIR)/fs.o $(EXCEPTION_TEST_DIR)/paging.o
+STORAGE_TEST_OBJECTS := $(STORAGE_TEST_DIR)/boot.o $(STORAGE_TEST_DIR)/kernel.o $(STORAGE_TEST_DIR)/memory.o $(STORAGE_TEST_DIR)/interrupts.o $(STORAGE_TEST_DIR)/isr_stubs.o $(STORAGE_TEST_DIR)/disk.o $(STORAGE_TEST_DIR)/fs.o $(STORAGE_TEST_DIR)/paging.o
+OBJECTS := $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/memory.o $(BUILD_DIR)/interrupts.o $(BUILD_DIR)/isr_stubs.o $(BUILD_DIR)/disk.o $(BUILD_DIR)/fs.o $(BUILD_DIR)/paging.o
 
 CFLAGS := -m32 -std=gnu11 -O2 -Wall -Wextra -Werror \
 	-ffreestanding -fno-builtin -fno-pie -fno-pic \
@@ -45,7 +45,7 @@ $(BUILD_DIR):
 $(BUILD_DIR)/boot.o: src/boot.S | $(BUILD_DIR)
 	$(CC) $(ASFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/kernel.o: src/kernel.c src/multiboot.h src/memory.h src/interrupts.h src/fs.h | $(BUILD_DIR)
+$(BUILD_DIR)/kernel.o: src/kernel.c src/multiboot.h src/memory.h src/interrupts.h src/fs.h src/paging.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/memory.o: src/memory.c src/memory.h src/multiboot.h | $(BUILD_DIR)
@@ -63,7 +63,7 @@ $(EXCEPTION_TEST_DIR):
 $(EXCEPTION_TEST_DIR)/boot.o: src/boot.S | $(EXCEPTION_TEST_DIR)
 	$(CC) $(ASFLAGS) -c $< -o $@
 
-$(EXCEPTION_TEST_DIR)/kernel.o: src/kernel.c src/multiboot.h src/memory.h src/interrupts.h src/fs.h | $(EXCEPTION_TEST_DIR)
+$(EXCEPTION_TEST_DIR)/kernel.o: src/kernel.c src/multiboot.h src/memory.h src/interrupts.h src/fs.h src/paging.h | $(EXCEPTION_TEST_DIR)
 	$(CC) $(CFLAGS) -DMICHAEL_OC_EXCEPTION_SELF_TEST -c $< -o $@
 
 $(EXCEPTION_TEST_DIR)/memory.o: src/memory.c src/memory.h src/multiboot.h | $(EXCEPTION_TEST_DIR)
@@ -81,10 +81,16 @@ $(EXCEPTION_TEST_DIR)/disk.o: src/disk.c src/disk.h src/multiboot.h | $(EXCEPTIO
 $(EXCEPTION_TEST_DIR)/fs.o: src/fs.c src/fs.h src/disk.h src/multiboot.h | $(EXCEPTION_TEST_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(EXCEPTION_TEST_DIR)/paging.o: src/paging.c src/paging.h src/memory.h src/multiboot.h | $(EXCEPTION_TEST_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/disk.o: src/disk.c src/disk.h src/multiboot.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/fs.o: src/fs.c src/fs.h src/disk.h src/multiboot.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/paging.o: src/paging.c src/paging.h src/memory.h src/multiboot.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(DISK_IMAGE): scripts/create_disk_image.py | $(BUILD_DIR)
@@ -96,7 +102,7 @@ $(STORAGE_TEST_DIR):
 $(STORAGE_TEST_DIR)/boot.o: src/boot.S | $(STORAGE_TEST_DIR)
 	$(CC) $(ASFLAGS) -c $< -o $@
 
-$(STORAGE_TEST_DIR)/kernel.o: src/kernel.c src/multiboot.h src/memory.h src/interrupts.h src/fs.h | $(STORAGE_TEST_DIR)
+$(STORAGE_TEST_DIR)/kernel.o: src/kernel.c src/multiboot.h src/memory.h src/interrupts.h src/fs.h src/paging.h | $(STORAGE_TEST_DIR)
 	$(CC) $(CFLAGS) -DMICHAEL_OC_STORAGE_SELF_TEST -c $< -o $@
 
 $(STORAGE_TEST_DIR)/memory.o: src/memory.c src/memory.h src/multiboot.h | $(STORAGE_TEST_DIR)
@@ -112,6 +118,9 @@ $(STORAGE_TEST_DIR)/disk.o: src/disk.c src/disk.h src/multiboot.h | $(STORAGE_TE
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(STORAGE_TEST_DIR)/fs.o: src/fs.c src/fs.h src/disk.h src/multiboot.h | $(STORAGE_TEST_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(STORAGE_TEST_DIR)/paging.o: src/paging.c src/paging.h src/memory.h src/multiboot.h | $(STORAGE_TEST_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(STORAGE_TEST_KERNEL): $(STORAGE_TEST_OBJECTS) linker.ld
@@ -161,7 +170,7 @@ test: $(ISO) $(DISK_IMAGE)
 	@rm -f $(BUILD_DIR)/serial.log
 	@set +e; $(TIMEOUT) 5s $(QEMU) -m 128M -cdrom $(ISO) -hda $(DISK_IMAGE) -display none -monitor none -serial file:$(BUILD_DIR)/serial.log -no-reboot -no-shutdown; rc=$$?; set -e; \
 	if [ "$$rc" -ne 0 ] && [ "$$rc" -ne 124 ]; then echo "FAIL: QEMU exited with status $$rc"; cat $(BUILD_DIR)/serial.log 2>/dev/null || true; exit "$$rc"; fi; \
-	for marker in MICHAEL_OC_BOOT_OK MICHAEL_OC_PMM_OK MICHAEL_OC_FS_OK MICHAEL_OC_KEYBOARD_IRQ_OK MICHAEL_OC_MONO_TEST_OK MICHAEL_OC_INPUT_TEST_OK MICHAEL_OC_FB_OK; do \
+	for marker in MICHAEL_OC_BOOT_OK MICHAEL_OC_PMM_OK MICHAEL_OC_PAGING_OK MICHAEL_OC_PAGING_SELF_TEST_OK MICHAEL_OC_FS_OK MICHAEL_OC_KEYBOARD_IRQ_OK MICHAEL_OC_MONO_TEST_OK MICHAEL_OC_INPUT_TEST_OK MICHAEL_OC_FB_OK; do \
 		if ! grep -q "$$marker" $(BUILD_DIR)/serial.log; then echo "FAIL: missing $$marker"; cat $(BUILD_DIR)/serial.log 2>/dev/null || true; exit 1; fi; \
 	done; \
 	echo "PASS: kernel boot, 1-bit canvas, UI input logic, framebuffer output, and keyboard IRQ startup."

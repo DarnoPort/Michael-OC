@@ -10,6 +10,7 @@
 #include "memory.h"
 #include "interrupts.h"
 #include "fs.h"
+#include "paging.h"
 
 #define VGA_WIDTH  80u
 #define VGA_HEIGHT 25u
@@ -1820,6 +1821,21 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
         serial_write("MICHAEL_OC_PMM_OK\r\n");
     } else {
         serial_write("MICHAEL_OC_PMM_FAIL\r\n");
+    }
+
+    if (!paging_init((const multiboot_info_t *)multiboot_info)) {
+        serial_write("MICHAEL_OC_PAGING_FAIL\r\n");
+        halt_forever();
+    }
+    serial_write("MICHAEL_OC_PAGING_OK\r\n");
+    if (pmm_is_initialized()) {
+        if (!paging_self_test()) {
+            serial_write("MICHAEL_OC_PAGING_SELF_TEST_FAIL\r\n");
+            halt_forever();
+        }
+        serial_write("MICHAEL_OC_PAGING_SELF_TEST_OK\r\n");
+    } else {
+        serial_write("MICHAEL_OC_PAGING_SELF_TEST_SKIPPED\r\n");
     }
 
 #ifdef MICHAEL_OC_STORAGE_SELF_TEST
