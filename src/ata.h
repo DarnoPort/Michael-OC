@@ -12,5 +12,8 @@ int ata_write_sector(u32 lba, const u8 *buffer);
 /* Uses reserved scratch sector 63 and restores its previous contents. */
 int ata_self_test(void);
 u32 ata_self_test_failure_stage(void);
+u32 ata_self_test_io_failure_stage(void);
+u32 ata_last_write_failure_stage(void);
+u32 ata_self_test_io_failure_stage(void);
 
 #endif

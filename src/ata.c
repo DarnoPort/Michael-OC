@@ -35,6 +35,8 @@ static u8 verify_sector[512];
 static u32 disk_sectors;
 static int device_ready;
 static u32 self_test_failure_stage;
+static u32 self_test_io_failure_stage;
+static u32 write_failure_stage;
 
 static inline void outb(u16 port, u8 value)
 {
@@ -194,8 +196,14 @@ int ata_read_sector(u32 lba, u8 *buffer)
 
 int ata_write_sector(u32 lba, const u8 *buffer)
 {
+    write_failure_stage = 0u;
     if (!device_ready || buffer == 0 || lba >= disk_sectors ||
-        lba >= ATA_LBA28_LIMIT || !ata_wait_command_complete()) {
+        lba >= ATA_LBA28_LIMIT) {
+        write_failure_stage = 1u;
+        return 0;
+    }
+    if (!ata_wait_command_complete()) {
+        write_failure_stage = 2u;
         return 0;
     }
 
@@ -208,6 +216,7 @@ int ata_write_sector(u32 lba, const u8 *buffer)
     outb(ATA_STATUS_COMMAND, ATA_CMD_WRITE);
 
     if (!ata_wait_data_request()) {
+        write_failure_stage = 3u;
         return 0;
     }
     for (u32 i = 0u; i < 256u; ++i) {
@@ -217,12 +226,22 @@ int ata_write_sector(u32 lba, const u8 *buffer)
     }
     ata_delay_400ns();
     if (!ata_wait_command_complete()) {
+        write_failure_stage = 4u;
         return 0;
     }
 
     outb(ATA_STATUS_COMMAND, ATA_CMD_FLUSH_CACHE);
     ata_delay_400ns();
-    return ata_wait_command_complete();
+    if (!ata_wait_command_complete()) {
+        write_failure_stage = 5u;
+        return 0;
+    }
+    return 1;
+}
+
+u32 ata_last_write_failure_stage(void)
+{
+    return write_failure_stage;
 }
 
 static int sector_matches(const u8 *left, const u8 *right)
@@ -238,6 +257,7 @@ static int sector_matches(const u8 *left, const u8 *right)
 int ata_self_test(void)
 {
     self_test_failure_stage = 0u;
+    self_test_io_failure_stage = 0u;
     if (!device_ready || !ata_read_sector(ATA_TEST_LBA, original_sector)) {
         self_test_failure_stage = 1u;
         return 0;
@@ -249,8 +269,10 @@ int ata_self_test(void)
 
     const int write_ok = ata_write_sector(ATA_TEST_LBA, pattern_sector);
     const int read_ok = write_ok && ata_read_sector(ATA_TEST_LBA, verify_sector);
-    if (!write_ok) self_test_failure_stage = 2u;
-    else if (!read_ok) self_test_failure_stage = 3u;
+    if (!write_ok) {
+        self_test_failure_stage = 20u + ata_last_write_failure_stage();
+        self_test_io_failure_stage = ata_last_write_failure_stage();
+    } else if (!read_ok) self_test_failure_stage = 3u;
     else if (!sector_matches(pattern_sector, verify_sector)) self_test_failure_stage = 4u;
 
     /* Always attempt to restore the original scratch-sector contents. */
@@ -272,4 +294,9 @@ int ata_self_test(void)
 u32 ata_self_test_failure_stage(void)
 {
     return self_test_failure_stage;
+}
+
+u32 ata_self_test_io_failure_stage(void)
+{
+    return self_test_io_failure_stage;
 }
