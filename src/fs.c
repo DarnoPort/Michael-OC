@@ -113,6 +113,16 @@ static int string_equals(const char *left, const char *right)
     return left[i] == '\0' && right[i] == '\0';
 }
 
+static int disk_name_equals(const char stored[24], const char *name)
+{
+    if (name == 0) return 0;
+    for (u32 i = 0u; i < 24u; ++i) {
+        if (stored[i] != name[i]) return 0;
+        if (stored[i] == '\0') return 1;
+    }
+    return 0; /* Reject malformed on-disk names lacking a terminator. */
+}
+
 static int bitmap_test(u32 lba)
 {
     return (sector_bitmap[lba >> 3] & (u8)(1u << (lba & 7u))) != 0u;
@@ -251,7 +261,7 @@ static int directory_find(u32 directory_number, const char *name,
         if (!lba_valid_data(lba) || !ata_read_sector(lba, sector_buffer)) return 0;
         const fs_disk_dirent_t *entries = (const fs_disk_dirent_t *)sector_buffer;
         for (u32 e = 0u; e < FS_SECTOR_SIZE / sizeof(fs_disk_dirent_t); ++e) {
-            if (entries[e].inode != 0u && string_equals(entries[e].name, name)) {
+            if (entries[e].inode != 0u && disk_name_equals(entries[e].name, name)) {
                 if (inode_number != 0) *inode_number = entries[e].inode;
                 if (sector_lba != 0) *sector_lba = lba;
                 if (slot_index != 0) *slot_index = e;
@@ -547,7 +557,6 @@ int fs_list(const char *path, fs_dir_entry_t *entries,
                 bytes_zero(&entries[total], sizeof(entries[total]));
                 bytes_copy(entries[total].name, disk_entries[e].name,
                            sizeof(disk_entries[e].name));
-                entries[total].name[FS_NAME_MAX + 1u] = '\0';
                 entries[total].type = inode_table[child].type;
                 entries[total].size = inode_table[child].size;
             }

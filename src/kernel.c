@@ -762,6 +762,16 @@ static void show_vga_fallback(void)
     vga_write_at(15u, 2u, "MICHAEL_OC_FB_UNAVAILABLE", 0x0Fu);
 }
 
+#if defined(MICHAEL_OC_FS_PERSISTENCE_WRITE_TEST) || defined(MICHAEL_OC_FS_PERSISTENCE_VERIFY_TEST)
+static int persistence_bytes_equal(const u8 *a, const u8 *b, u32 size)
+{
+    for (u32 i = 0u; i < size; ++i) {
+        if (a[i] != b[i]) return 0;
+    }
+    return 1;
+}
+#endif
+
 void kernel_main(u32 multiboot_magic, u32 multiboot_info)
 {
     serial_init();
@@ -833,7 +843,7 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
             fs_write("/.ci-persistence", 0u, payload, (u32)sizeof(payload)) &&
             fs_read("/.ci-persistence", 0u, verify, (u32)sizeof(verify), &bytes_read) &&
             bytes_read == (u32)sizeof(payload) &&
-            bytes_equal(payload, verify, (u32)sizeof(payload));
+            persistence_bytes_equal(payload, verify, (u32)sizeof(payload));
         if (ok) serial_write("MICHAEL_OC_FS_PERSIST_WRITE_OK\r\n");
         else serial_write("MICHAEL_OC_FS_PERSIST_WRITE_FAILED\r\n");
     }
@@ -855,7 +865,7 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
         const int ok = fs_read("/.ci-persistence", 0u, verify,
                                (u32)sizeof(verify), &bytes_read) &&
             bytes_read == (u32)sizeof(expected) &&
-            bytes_equal(expected, verify, (u32)sizeof(expected));
+            persistence_bytes_equal(expected, verify, (u32)sizeof(expected));
         if (ok) serial_write("MICHAEL_OC_FS_PERSIST_VERIFY_OK\r\n");
         else serial_write("MICHAEL_OC_FS_PERSIST_VERIFY_FAILED\r\n");
     }
