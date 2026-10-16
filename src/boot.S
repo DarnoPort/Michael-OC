@@ -1,4 +1,4 @@
-.section .multiboot
+.section .multiboot,"a"
 .align 4
 .long 0x1BADB002
 .long 0x00000000
@@ -16,10 +16,13 @@ stack_top:
 _start:
     cli
     mov $stack_top, %esp
+    and $-16, %esp
+    sub $8, %esp
     xor %ebp, %ebp
 
     /*
      * Multiboot v1 enters with EAX=magic and EBX=info pointer.
+     * Keep 16-byte call-site alignment for the compiled C kernel.
      * C uses cdecl: push arguments right-to-left.
      */
     push %ebx
