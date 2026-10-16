@@ -39,7 +39,8 @@ enum ui_screen {
     UI_SCREEN_KEYBOARD,
     UI_SCREEN_FRAMEBUFFER,
     UI_SCREEN_FILES,
-    UI_SCREEN_EDITOR
+    UI_SCREEN_EDITOR,
+    UI_SCREEN_APP
 };
 static enum ui_screen active_screen = UI_SCREEN_HOME;
 static u8 last_key_scancode;
@@ -76,6 +77,23 @@ static enum ui_screen editor_return_screen = UI_SCREEN_FILES;
 static char editor_filename[32];
 static int editor_dirty;
 static int editor_exit_confirm;
+
+#define MOCAPP_MAX_LINES 256u
+#define MOCAPP_OUTPUT_LINES 14u
+#define MOCAPP_OUTPUT_WIDTH 96u
+static char mocapp_program[UI_EDITOR_CAPACITY + 1u];
+static char *mocapp_lines[MOCAPP_MAX_LINES];
+static u32 mocapp_line_count;
+static u32 mocapp_pc;
+static char mocapp_output[MOCAPP_OUTPUT_LINES][MOCAPP_OUTPUT_WIDTH];
+static u32 mocapp_output_count;
+static int mocapp_running;
+static int mocapp_waiting_key;
+static char mocapp_last_key;
+static int mocapp_register;
+static enum ui_screen mocapp_return_screen = UI_SCREEN_FILES;
+static char mocapp_filename[32];
+static fs_entry_t mocapp_list_entries[FS_DIRECTORY_LIMIT];
 
 static u32 vga_index(u32 row, u32 col)
 {
@@ -623,6 +641,295 @@ static char ui_scancode_to_ascii(u8 scancode)
     }
 }
 
+
+static char *mocapp_skip_spaces(char *text)
+{
+    while (*text == ' ' || *text == '\t') ++text;
+    return text;
+}
+static int mocapp_token_equal(const char *left, const char *right)
+{
+    u32 i = 0u;
+    while (left[i] != '\0' && right[i] != '\0') {
+        char a = left[i], b = right[i];
+        if (a >= 'a' && a <= 'z') a = (char)(a - 'a' + 'A');
+        if (b >= 'a' && b <= 'z') b = (char)(b - 'a' + 'A');
+        if (a != b) return 0;
+        ++i;
+    }
+    return left[i] == '\0' && right[i] == '\0';
+}
+static int mocapp_parse_integer(const char *text, int *value_out)
+{
+    if (text == 0 || value_out == 0) return 0;
+    while (*text == ' ' || *text == '\t') ++text;
+    int negative = 0;
+    if (*text == '-') { negative = 1; ++text; }
+    if (*text < '0' || *text > '9') return 0;
+    int value = 0;
+    while (*text >= '0' && *text <= '9') {
+        const int digit = *text - '0';
+        if (value > 200000000 || (value == 200000000 && digit > 0)) return 0;
+        value = value * 10 + digit;
+        ++text;
+    }
+    while (*text == ' ' || *text == '\t') ++text;
+    if (*text != '\0') return 0;
+    *value_out = negative ? -value : value;
+    return 1;
+}
+static void mocapp_clear_output(void)
+{
+    mocapp_output_count = 0u;
+    for (u32 i = 0u; i < MOCAPP_OUTPUT_LINES; ++i)
+        mocapp_output[i][0] = '\0';
+}
+static void mocapp_print_line(const char *message)
+{
+    if (mocapp_output_count == MOCAPP_OUTPUT_LINES) {
+        for (u32 i = 1u; i < MOCAPP_OUTPUT_LINES; ++i)
+            ui_copy_text(mocapp_output[i - 1u], MOCAPP_OUTPUT_WIDTH, mocapp_output[i]);
+        --mocapp_output_count;
+    }
+    ui_copy_text(mocapp_output[mocapp_output_count], MOCAPP_OUTPUT_WIDTH, message);
+    ++mocapp_output_count;
+    serial_write("MICHAEL_OC_APP_PRINT=");
+    serial_write(message);
+    serial_write("\r\n");
+}
+static void mocapp_print_integer(int value)
+{
+    char output[16], digits[12];
+    u32 length = 0u, count = 0u;
+    unsigned int magnitude;
+    if (value < 0) {
+        output[length++] = '-';
+        magnitude = (unsigned int)(-(value + 1)) + 1u;
+    } else magnitude = (unsigned int)value;
+    do {
+        digits[count++] = (char)('0' + magnitude % 10u);
+        magnitude /= 10u;
+    } while (magnitude != 0u && count < sizeof(digits));
+    while (count > 0u) output[length++] = digits[--count];
+    output[length] = '\0';
+    mocapp_print_line(output);
+}
+static int mocapp_is_script(const char *name)
+{
+    const u32 length = ui_text_length(name);
+    if (length < 5u) return 0;
+    const char *suffix = name + length - 5u;
+    return suffix[0] == '.' &&
+           (suffix[1] == 'm' || suffix[1] == 'M') &&
+           (suffix[2] == 'a' || suffix[2] == 'A') &&
+           (suffix[3] == 'p' || suffix[3] == 'P') &&
+           (suffix[4] == 'p' || suffix[4] == 'P');
+}
+static void mocapp_close(const char *reason)
+{
+    mocapp_running = 0;
+    mocapp_waiting_key = 0;
+    active_screen = mocapp_return_screen;
+    ui_set_message(reason);
+    serial_write("MICHAEL_OC_APP_EXIT\r\n");
+}
+static void mocapp_execute(void)
+{
+    u32 budget = 128u;
+    while (mocapp_running && !mocapp_waiting_key &&
+           mocapp_pc < mocapp_line_count && budget > 0u) {
+        --budget;
+        char *line = mocapp_skip_spaces(mocapp_lines[mocapp_pc]);
+        if (*line == '\0' || *line == '#') {
+            ++mocapp_pc;
+            continue;
+        }
+        char *argument = line;
+        while (*argument != '\0' && *argument != ' ' && *argument != '\t') ++argument;
+        if (*argument != '\0') {
+            *argument++ = '\0';
+            argument = mocapp_skip_spaces(argument);
+        }
+        if (mocapp_token_equal(line, "PRINT")) {
+            mocapp_print_line(argument);
+            ++mocapp_pc;
+        } else if (mocapp_token_equal(line, "CLEAR")) {
+            mocapp_clear_output();
+            ++mocapp_pc;
+        } else if (mocapp_token_equal(line, "WAITKEY")) {
+            ++mocapp_pc;
+            mocapp_waiting_key = 1;
+            serial_write("MICHAEL_OC_APP_WAITKEY\r\n");
+        } else if (mocapp_token_equal(line, "JUMP")) {
+            int target = 0;
+            if (!mocapp_parse_integer(argument, &target) ||
+                target < 0 || (u32)target >= mocapp_line_count) {
+                mocapp_print_line("VM ERROR: BAD JUMP TARGET");
+                mocapp_close("APP ERROR");
+                return;
+            }
+            mocapp_pc = (u32)target;
+        } else if (mocapp_token_equal(line, "IFKEY")) {
+            const char expected = argument[0];
+            char *target_text = argument;
+            if (*target_text != '\0') ++target_text;
+            while (*target_text == ' ' || *target_text == '\t') ++target_text;
+            int target = 0;
+            if (expected == '\0' || !mocapp_parse_integer(target_text, &target) ||
+                target < 0 || (u32)target >= mocapp_line_count) {
+                mocapp_print_line("VM ERROR: USE IFKEY CHAR LINE");
+                mocapp_close("APP ERROR");
+                return;
+            }
+            if (mocapp_last_key == expected) mocapp_pc = (u32)target;
+            else ++mocapp_pc;
+        } else if (mocapp_token_equal(line, "SET") ||
+                   mocapp_token_equal(line, "ADD") ||
+                   mocapp_token_equal(line, "SUB")) {
+            int value = 0;
+            if (!mocapp_parse_integer(argument, &value)) {
+                mocapp_print_line("VM ERROR: EXPECTED INTEGER");
+                mocapp_close("APP ERROR");
+                return;
+            }
+            if (mocapp_token_equal(line, "SET")) mocapp_register = value;
+            else if (mocapp_token_equal(line, "ADD")) mocapp_register += value;
+            else mocapp_register -= value;
+            ++mocapp_pc;
+        } else if (mocapp_token_equal(line, "PRINTNUM")) {
+            mocapp_print_integer(mocapp_register);
+            ++mocapp_pc;
+        } else if (mocapp_token_equal(line, "LS")) {
+            u32 count = 0u;
+            if (!fs_list(ui_current_directory(), mocapp_list_entries,
+                         FS_DIRECTORY_LIMIT, &count)) {
+                mocapp_print_line("LS FAILED");
+            } else {
+                for (u32 i = 0u; i < count; ++i)
+                    mocapp_print_line(mocapp_list_entries[i].name);
+            }
+            ++mocapp_pc;
+        } else if (mocapp_token_equal(line, "READ")) {
+            u16 index = 0u;
+            u8 data[512];
+            u32 size = 0u;
+            if (!fs_lookup(ui_current_directory(), argument, &index) ||
+                !fs_read_file(index, data, sizeof(data) - 1u, &size)) {
+                mocapp_print_line("READ FAILED (MISSING OR OVER 511 BYTES)");
+            } else {
+                data[size] = '\0';
+                char *start = (char *)data;
+                for (u32 i = 0u; i <= size; ++i) {
+                    if (data[i] == '\n' || data[i] == '\0') {
+                        const u8 saved = data[i];
+                        data[i] = '\0';
+                        mocapp_print_line(start);
+                        start = (char *)data + i + 1u;
+                        data[i] = saved;
+                    }
+                }
+            }
+            ++mocapp_pc;
+        } else if (mocapp_token_equal(line, "WRITE")) {
+            char *name = argument;
+            char *content = name;
+            while (*content != '\0' && *content != ' ' && *content != '\t') ++content;
+            if (*content != '\0') *content++ = '\0';
+            content = mocapp_skip_spaces(content);
+            u16 index = 0u;
+            if (*name == '\0') {
+                mocapp_print_line("WRITE FAILED: MISSING NAME");
+            } else if ((!fs_lookup(ui_current_directory(), name, &index) &&
+                        !fs_create_file(ui_current_directory(), name, &index)) ||
+                       !fs_write_file(index, (const u8 *)content, ui_text_length(content))) {
+                mocapp_print_line("WRITE FAILED");
+            } else {
+                mocapp_print_line("WRITE OK");
+            }
+            ++mocapp_pc;
+        } else if (mocapp_token_equal(line, "EXIT")) {
+            mocapp_close("APP FINISHED");
+            return;
+        } else {
+            mocapp_print_line("VM ERROR: UNKNOWN COMMAND");
+            mocapp_close("APP ERROR");
+            return;
+        }
+    }
+    if (mocapp_running && !mocapp_waiting_key && mocapp_pc >= mocapp_line_count) {
+        mocapp_close("APP FINISHED");
+    } else if (mocapp_running && !mocapp_waiting_key && budget == 0u) {
+        mocapp_print_line("VM ERROR: INSTRUCTION BUDGET EXHAUSTED");
+        mocapp_close("APP ERROR");
+    }
+}
+static int mocapp_start_file(u16 index, const char *name, enum ui_screen return_screen)
+{
+    u32 size = 0u;
+    if (!fs_read_file(index, (u8 *)mocapp_program, UI_EDITOR_CAPACITY, &size)) {
+        ui_set_message("APP LOAD FAILED OR FILE TOO LARGE");
+        return 0;
+    }
+    mocapp_program[size] = '\0';
+    mocapp_line_count = 0u;
+    mocapp_pc = 0u;
+    mocapp_clear_output();
+    mocapp_waiting_key = 0;
+    mocapp_running = 1;
+    mocapp_last_key = '\0';
+    mocapp_register = 0;
+    mocapp_return_screen = return_screen;
+    ui_copy_text(mocapp_filename, sizeof(mocapp_filename), name);
+    if (size != 0u) mocapp_lines[mocapp_line_count++] = mocapp_program;
+    for (u32 i = 0u; i < size; ++i) {
+        if (mocapp_program[i] == '\r') mocapp_program[i] = '\0';
+        if (mocapp_program[i] == '\n') {
+            mocapp_program[i] = '\0';
+            if (i + 1u < size) {
+                if (mocapp_line_count >= MOCAPP_MAX_LINES) {
+                    ui_set_message("APP HAS TOO MANY LINES");
+                    mocapp_running = 0;
+                    return 0;
+                }
+                mocapp_lines[mocapp_line_count++] = &mocapp_program[i + 1u];
+            }
+        }
+    }
+    active_screen = UI_SCREEN_APP;
+    ui_set_message("APP LOADED");
+    serial_write("MICHAEL_OC_APP_STARTED=");
+    serial_write(mocapp_filename);
+    serial_write("\r\n");
+    mocapp_execute();
+    return 1;
+}
+static void mocapp_handle_key(u8 scancode)
+{
+    if (scancode == 0x3Bu) {
+        mocapp_close("APP STOPPED");
+        return;
+    }
+    if (!mocapp_waiting_key) return;
+    mocapp_last_key = ui_scancode_to_ascii(scancode);
+    serial_write("MICHAEL_OC_APP_KEY=");
+    if (mocapp_last_key != '\0') {
+        char text[2] = {mocapp_last_key, '\0'};
+        serial_write(text);
+    }
+    serial_write("\r\n");
+    mocapp_waiting_key = 0;
+    mocapp_execute();
+}
+static void draw_mocapp_screen(void)
+{
+    draw_window_frame("MOCAPP RUNTIME");
+    mono_draw_text(80u, 118u, mocapp_filename, 1u, 0);
+    for (u32 i = 0u; i < mocapp_output_count; ++i)
+        mono_draw_text(80u, 145u + i * 20u, mocapp_output[i], 1u, 0);
+    mono_draw_text(80u, 458u, mocapp_waiting_key ? "APP WAITING FOR A KEY" : "APP RUNNING", 1u, 0);
+    mono_draw_text(80u, 482u, "ESC RETURN TO FILE MANAGER  F1 STOP", 1u, 0);
+}
+
 static void draw_file_manager(void)
 {
     draw_window_frame("FILE MANAGER");
@@ -799,28 +1106,16 @@ static void draw_text_editor(void)
 static void render_active_screen(void)
 {
     switch (active_screen) {
-    case UI_SCREEN_SYSTEM:
-        draw_system_screen();
-        break;
-    case UI_SCREEN_KEYBOARD:
-        draw_keyboard_screen();
-        break;
-    case UI_SCREEN_FRAMEBUFFER:
-        draw_framebuffer_screen();
-        break;
-    case UI_SCREEN_FILES:
-        draw_file_manager();
-        break;
-    case UI_SCREEN_EDITOR:
-        draw_text_editor();
-        break;
+    case UI_SCREEN_SYSTEM: draw_system_screen(); break;
+    case UI_SCREEN_KEYBOARD: draw_keyboard_screen(); break;
+    case UI_SCREEN_FRAMEBUFFER: draw_framebuffer_screen(); break;
+    case UI_SCREEN_FILES: draw_file_manager(); break;
+    case UI_SCREEN_EDITOR: draw_text_editor(); break;
+    case UI_SCREEN_APP: draw_mocapp_screen(); break;
     case UI_SCREEN_HOME:
-    default:
-        draw_home_screen();
-        break;
+    default: draw_home_screen(); break;
     }
 }
-
 
 static void ui_start_file_dialog(enum ui_file_dialog_mode mode)
 {
@@ -936,45 +1231,6 @@ static int ui_handle_file_manager_scancode(u8 scancode)
             return 0;
         }
         if (scancode == 0x1Cu) {
-            ui_finish_file_dialog();
-            return 1;
-        }
-        if (scancode == 0x0Eu) {
-            if (ui_file_dialog_length > 0u)
-                ui_file_dialog_buffer[--ui_file_dialog_length] = '\0';
-            return 1;
-        }
-        const char ch = ui_scancode_to_ascii(scancode);
-        if (ch != '\0' && ui_file_dialog_length < FS_NAME_MAX) {
-            ui_file_dialog_buffer[ui_file_dialog_length++] = ch;
-            ui_file_dialog_buffer[ui_file_dialog_length] = '\0';
-            return 1;
-        }
-        return 0;
-    }
-
-    if (scancode == 0x48u) {
-        if (ui_file_count != 0u && ui_file_selection > 0u) --ui_file_selection;
-        return 1;
-    }
-    if (scancode == 0x50u) {
-        if (ui_file_count != 0u && ui_file_selection + 1u < ui_file_count) ++ui_file_selection;
-        return 1;
-    }
-    if (scancode == 0x0Eu) {
-        if (ui_directory_depth > 0u) {
-            --ui_directory_depth;
-            ui_file_selection = 0u;
-            ui_set_message("PARENT DIRECTORY");
-        } else ui_set_message("ALREADY AT ROOT");
-        return 1;
-    }
-    if (scancode == 0x3Cu) {
-        ui_set_message("DIRECTORY REFRESHED");
-        ui_refresh_file_list();
-        return 1;
-    }
-    if (scancode == 0x1Cu) {
         if (ui_file_selection >= ui_file_count) return 0;
         u16 index = 0u;
         const fs_entry_t *entry = &ui_file_entries[ui_file_selection];
@@ -990,7 +1246,11 @@ static int ui_handle_file_manager_scancode(u8 scancode)
             ui_directory_stack[ui_directory_depth++] = index;
             ui_file_selection = 0u;
             ui_set_message("DIRECTORY OPENED");
-        } else (void)editor_open_file(index, entry->name, UI_SCREEN_FILES);
+        } else if (mocapp_is_script(entry->name)) {
+            (void)mocapp_start_file(index, entry->name, UI_SCREEN_FILES);
+        } else {
+            (void)editor_open_file(index, entry->name, UI_SCREEN_FILES);
+        }
         return 1;
     }
     if (scancode == 0x31u) {
@@ -1113,6 +1373,10 @@ static int handle_ui_scancode(u8 scancode)
         (scancode & 0x80u) != 0u) return 0;
 
     if (scancode == 0x01u) {
+        if (active_screen == UI_SCREEN_APP) {
+            mocapp_close("APP STOPPED");
+            return 1;
+        }
         if (active_screen == UI_SCREEN_EDITOR) {
             if (editor_dirty && !editor_exit_confirm) {
                 editor_exit_confirm = 1;
@@ -1139,6 +1403,10 @@ static int handle_ui_scancode(u8 scancode)
 
     if (active_screen == UI_SCREEN_FILES) return ui_handle_file_manager_scancode(scancode);
     if (active_screen == UI_SCREEN_EDITOR) return ui_handle_editor_scancode(scancode);
+    if (active_screen == UI_SCREEN_APP) {
+        mocapp_handle_key(scancode);
+        return 1;
+    }
 
     if (active_screen == UI_SCREEN_HOME) {
         if (scancode == 0x02u) { active_screen = UI_SCREEN_SYSTEM; return 1; }
@@ -1355,25 +1623,14 @@ static int keyboard_try_read_scancode(u8 *scancode)
 static void log_ui_screen_event(void)
 {
     switch (active_screen) {
-    case UI_SCREEN_SYSTEM:
-        serial_write("MICHAEL_OC_UI_SCREEN=SYSTEM\r\n");
-        break;
-    case UI_SCREEN_KEYBOARD:
-        serial_write("MICHAEL_OC_UI_SCREEN=KEYBOARD\r\n");
-        break;
-    case UI_SCREEN_FRAMEBUFFER:
-        serial_write("MICHAEL_OC_UI_SCREEN=FRAMEBUFFER\r\n");
-        break;
-    case UI_SCREEN_FILES:
-        serial_write("MICHAEL_OC_UI_SCREEN=FILES\r\n");
-        break;
-    case UI_SCREEN_EDITOR:
-        serial_write("MICHAEL_OC_UI_SCREEN=EDITOR\r\n");
-        break;
+    case UI_SCREEN_SYSTEM: serial_write("MICHAEL_OC_UI_SCREEN=SYSTEM\r\n"); break;
+    case UI_SCREEN_KEYBOARD: serial_write("MICHAEL_OC_UI_SCREEN=KEYBOARD\r\n"); break;
+    case UI_SCREEN_FRAMEBUFFER: serial_write("MICHAEL_OC_UI_SCREEN=FRAMEBUFFER\r\n"); break;
+    case UI_SCREEN_FILES: serial_write("MICHAEL_OC_UI_SCREEN=FILES\r\n"); break;
+    case UI_SCREEN_EDITOR: serial_write("MICHAEL_OC_UI_SCREEN=EDITOR\r\n"); break;
+    case UI_SCREEN_APP: serial_write("MICHAEL_OC_UI_SCREEN=APP\r\n"); break;
     case UI_SCREEN_HOME:
-    default:
-        serial_write("MICHAEL_OC_UI_SCREEN=HOME\r\n");
-        break;
+    default: serial_write("MICHAEL_OC_UI_SCREEN=HOME\r\n"); break;
     }
 }
 
