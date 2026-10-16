@@ -75,3 +75,7 @@ The kernel now enables 32-bit 4 KiB page tables with a supervisor-only identity 
 This is a kernel-memory foundation, not userspace isolation. The current map still identity-maps most physical addresses as writable supervisor pages. User-mode address spaces, demand paging, page reclamation, page-fault recovery, and per-process page tables remain unimplemented.
 
 A separate QEMU test deliberately attempts to write to the kernel's protected text page. It requires x86 page-fault vector 14, the expected supervisor-write/protection error bits, and a CR2 address equal to the faulting target. This validates actual CPU enforcement of the read-only mapping, not just the page-table flags.
+
+## Mouse input
+
+The guest initializes the PS/2 auxiliary device and IRQ12 when the emulated controller supports it. The UI draws a black/white pointer directly into the one-bit canvas. Click the home-screen menu items to open screens; click a file-manager row to open it; use the footer/tool area for common file actions and editor cursor placement. Dialog text is still entered through the keyboard. The QEMU integration test injects movement and a left-click, adjusts for the observed mouse Y-axis convention, and verifies that clicking the desktop's File Manager item changes the active screen.

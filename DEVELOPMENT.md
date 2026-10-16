@@ -94,3 +94,7 @@ A 4 KiB page-table implementation has been added. It identity-maps the 32-bit ad
 This is not per-process virtual memory or userspace isolation. The initial mapping remains a single global supervisor address space, with most addresses writable. Latest CI must pass before this milestone is marked verified.
 
 A dedicated page-fault diagnostic kernel now attempts a write to a kernel text address after enabling paging. Its test requires #PF vector 14, error code 3 (present-page write protection violation from supervisor mode), and CR2 matching the exact target address. This moves protection checking from inspecting PTE bits alone to observing CPU-enforced behavior; the test must pass in CI before marked verified.
+
+## Mouse input (latest change pending CI)
+
+Added a PS/2 auxiliary-port initialization sequence, IRQ12 packet handling, packet resynchronization, signed delta decoding, bounded event queue, monochrome cursor rendering, and click dispatch to the existing keyboard-driven UI actions. Mouse initialization is optional on a machine without an auxiliary device; in that case boot continues with keyboard input only. QEMU testing now verifies movement and a click that navigates from the home screen into the file manager. In this kernel-resident prototype, pointer events and click handling execute in ring 0, as does the rest of the UI.

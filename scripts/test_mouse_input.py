@@ -49,6 +49,32 @@ def command(conn: socket.socket, text: str) -> bytes:
     return response
 
 
+def last_position(log: Path) -> tuple[int, int] | None:
+    import re
+    contents = log.read_text(errors="replace") if log.exists() else ""
+    matches = re.findall(
+        r"MICHAEL_OC_MOUSE_POSITION=(0x[0-9A-Fa-f]{8}),(0x[0-9A-Fa-f]{8})",
+        contents,
+    )
+    if not matches:
+        return None
+    x_text, y_text = matches[-1]
+    return int(x_text, 16), int(y_text, 16)
+
+
+def wait_position_change(log: Path, process: subprocess.Popen,
+                         previous: tuple[int, int], timeout: float = 3.0) -> tuple[int, int]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError("QEMU exited while waiting for mouse movement")
+        current = last_position(log)
+        if current is not None and current != previous:
+            return current
+        time.sleep(0.03)
+    raise TimeoutError(f"mouse position did not change from {previous}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--qemu", required=True)
@@ -88,10 +114,50 @@ def main() -> int:
 
         command(monitor, "mouse_move 40 20")
         wait_marker(log, "MICHAEL_OC_MOUSE_EVENT", process, 3.0)
+        position = last_position(log)
+        if position is None:
+            raise RuntimeError("mouse event did not report a cursor position")
+
         command(monitor, "mouse_button 1")
         wait_marker(log, "MICHAEL_OC_MOUSE_CLICK", process, 3.0)
         command(monitor, "mouse_button 0")
-        print("PASS: QEMU mouse movement and left-click reached the kernel through PS/2 IRQ12.")
+
+        # Determine the active Y-axis convention from a measured movement rather
+        # than assuming whether the monitor reports screen or device coordinates.
+        command(monitor, "mouse_move 0 10")
+        probed = wait_position_change(log, process, position)
+        y_delta = probed[1] - position[1]
+        if y_delta == 0:
+            command(monitor, "mouse_move 0 -20")
+            reversed_probe = wait_position_change(log, process, probed)
+            y_delta = reversed_probe[1] - probed[1]
+            probed = reversed_probe
+        if y_delta == 0:
+            raise RuntimeError("QEMU mouse movement did not change the cursor Y coordinate")
+
+        target_y = 193
+        direction = 1 if y_delta > 0 else -1
+        move_y = target_y - probed[1]
+        input_y = move_y * direction
+        if input_y < -255 or input_y > 255:
+            raise RuntimeError(f"mouse test cannot reach menu row from Y={probed[1]}")
+        if input_y != 0:
+            previous = probed
+            command(monitor, f"mouse_move 0 {input_y}")
+            arrived = wait_position_change(log, process, previous)
+            # Correct for any controller scaling by using the observed position.
+            correction = target_y - arrived[1]
+            if correction != 0:
+                previous = arrived
+                command(monitor, f"mouse_move 0 {correction * direction}")
+                arrived = wait_position_change(log, process, previous)
+            probed = arrived
+
+        # X stays near 440 (inside the File Manager item); the click must navigate.
+        command(monitor, "mouse_button 1")
+        wait_marker(log, "MICHAEL_OC_UI_SCREEN=FILES", process, 3.0)
+        command(monitor, "mouse_button 0")
+        print("PASS: QEMU mouse movement, left-click, and desktop navigation reached the kernel through PS/2 IRQ12.")
         return 0
     except Exception as exc:
         contents = log.read_text(errors="replace") if log.exists() else ""

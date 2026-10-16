@@ -1812,7 +1812,9 @@ static void keyboard_event_loop(void)
     for (;;) {
         mouse_event_t mouse_event;
         if (mouse_try_get_event(&mouse_event)) {
+            const enum ui_screen previous_screen = active_screen;
             ui_handle_mouse_event(&mouse_event);
+            if (active_screen != previous_screen) log_ui_screen_event();
             render_active_screen();
             mono_flush_framebuffer();
             continue;
