@@ -11,6 +11,7 @@ Michael OC is an independent operating-system project targeting QEMU on Ubuntu L
 - Keyboard-driven diagnostic UI: home, system status, keyboard test and framebuffer test.
 - Interrupt-driven PS/2 keyboard input (PIC IRQ1) with an end-to-end QEMU key-injection test.
 - ATA PIO access to a QEMU IDE disk and Michael OC FS v1 with nested directories, file read/write, rename and delete.
+- Keyboard-operated file manager and text editor with insert/delete, cursor movement, and F2 save-to-disk.
 - Two-cold-boot QEMU test for persistent file contents and filesystem CRUD.
 - IDT entries for CPU exception vectors 0–31, serial fatal-exception reporting, and a dedicated QEMU `INT3` dispatch test.
 - Multiboot memory-map parser and physical page allocator for fully usable RAM pages below 4 GiB.

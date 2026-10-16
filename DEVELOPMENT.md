@@ -51,6 +51,7 @@
 - src/memory.h and src/memory.c — physical frame allocator and allocator self-test.
 - src/disk.h and src/disk.c — primary-master ATA PIO sector I/O.
 - src/fs.h and src/fs.c — MOCFS1 mount, directory operations, and file read/write.
+- src/kernel.c — monochrome file-manager/editor screens and keyboard application controls.
 - src/kernel.c — serial diagnostics, one-bit canvas, monochrome UI pages, keyboard state handler and polled PS/2 input.
 - src/interrupts.h and src/interrupts.c — IDT setup, descriptor-register verification, PIC remapping, PS/2 IRQ1 handling and a scan-code queue.
 - src/isr_stubs.S — CPU exception stubs, PIC IRQ stubs, and common assembly dispatch paths.
@@ -60,6 +61,7 @@
 - scripts/test_keyboard_input.py — QEMU HMP key-injection test.
 - scripts/create_disk_image.py — creates a blank formatted MOCFS1 disk image.
 - scripts/test_storage.py — writes in one QEMU process, verifies in another, and checks filesystem CRUD.
+- scripts/test_apps.py — creates and edits a document through the GUI, restarts QEMU, and reopens it.
 - .github/workflows/build.yml — Ubuntu CI build, QEMU test and ISO artifact upload.
 - README.md — setup, build, run, controls and known limitations.
 

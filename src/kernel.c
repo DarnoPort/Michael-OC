@@ -37,10 +37,45 @@ enum ui_screen {
     UI_SCREEN_HOME = 0,
     UI_SCREEN_SYSTEM,
     UI_SCREEN_KEYBOARD,
-    UI_SCREEN_FRAMEBUFFER
+    UI_SCREEN_FRAMEBUFFER,
+    UI_SCREEN_FILES,
+    UI_SCREEN_EDITOR
 };
 static enum ui_screen active_screen = UI_SCREEN_HOME;
 static u8 last_key_scancode;
+
+#define UI_EDITOR_CAPACITY 16384u
+#define UI_EDITOR_LINE_WIDTH 100u
+#define UI_EDITOR_VISIBLE_LINES 18u
+#define UI_FILE_VISIBLE_ENTRIES 12u
+
+enum ui_file_dialog_mode {
+    UI_FILE_DIALOG_NONE = 0,
+    UI_FILE_DIALOG_NEW_FILE,
+    UI_FILE_DIALOG_NEW_DIRECTORY,
+    UI_FILE_DIALOG_RENAME,
+    UI_FILE_DIALOG_DELETE_CONFIRM
+};
+
+static u16 ui_directory_stack[FS_DIRECTORY_LIMIT];
+static u32 ui_directory_depth;
+static fs_entry_t ui_file_entries[FS_DIRECTORY_LIMIT];
+static u32 ui_file_count;
+static u32 ui_file_selection;
+static enum ui_file_dialog_mode ui_file_dialog;
+static char ui_file_dialog_buffer[32];
+static u32 ui_file_dialog_length;
+static char ui_status_message[48];
+
+static u8 editor_buffer[UI_EDITOR_CAPACITY];
+static u32 editor_size;
+static u32 editor_cursor;
+static u32 editor_first_line;
+static u16 editor_file_index;
+static enum ui_screen editor_return_screen = UI_SCREEN_FILES;
+static char editor_filename[32];
+static int editor_dirty;
+static int editor_exit_confirm;
 
 static u32 vga_index(u32 row, u32 col)
 {
@@ -386,12 +421,14 @@ static void draw_home_screen(void)
 {
     draw_window_frame("MICHAEL OC");
     mono_draw_text(80u, 140u, "MONOCHROME SYSTEM READY", 2u, 0);
-    mono_draw_text(80u, 222u, "1 SYSTEM STATUS", 2u, 0);
-    mono_draw_text(80u, 266u, "2 KEYBOARD TEST", 2u, 0);
-    mono_draw_text(80u, 310u, "3 FRAMEBUFFER TEST", 2u, 0);
-    mono_fill_rect(80u, 370u, 640u, 2u, 1);
-    mono_draw_text(80u, 405u, "PRESS 1 2 OR 3 TO OPEN A SCREEN", 1u, 0);
-    mono_draw_text(80u, 430u, "USE ESC TO RETURN HOME", 1u, 0);
+    mono_draw_text(80u, 188u, "1 SYSTEM STATUS", 2u, 0);
+    mono_draw_text(80u, 226u, "2 KEYBOARD TEST", 2u, 0);
+    mono_draw_text(80u, 264u, "3 DISPLAY TEST", 2u, 0);
+    mono_draw_text(405u, 188u, "4 FILE MANAGER", 2u, 0);
+    mono_draw_text(405u, 226u, "5 TEXT EDITOR", 2u, 0);
+    mono_fill_rect(80u, 315u, 640u, 2u, 1);
+    mono_draw_text(80u, 345u, "PRESS A NUMBER TO LAUNCH AN APP", 1u, 0);
+    mono_draw_text(80u, 370u, "USE ESC TO RETURN HOME", 1u, 0);
     mono_draw_text(80u, 485u, fs_is_mounted() ? "STORAGE: PERSISTENT FS READY" : "NO VIRTUAL DISK DETECTED", 1u, 0);
 }
 
@@ -444,6 +481,321 @@ static void draw_framebuffer_screen(void)
     mono_draw_text(80u, 405u, "PER PIXEL; NO GREY VALUE EXISTS", 1u, 0);
 }
 
+
+static void ui_set_message(const char *message)
+{
+    u32 i = 0u;
+    while (i < sizeof(ui_status_message) - 1u && message != 0 && message[i] != '\0') {
+        ui_status_message[i] = message[i];
+        ++i;
+    }
+    ui_status_message[i] = '\0';
+    while (++i < sizeof(ui_status_message)) ui_status_message[i] = '\0';
+}
+
+static void ui_copy_text(char *destination, u32 capacity, const char *source)
+{
+    if (capacity == 0u) return;
+    u32 i = 0u;
+    while (i + 1u < capacity && source != 0 && source[i] != '\0') {
+        destination[i] = source[i];
+        ++i;
+    }
+    destination[i] = '\0';
+    while (++i < capacity) destination[i] = '\0';
+}
+
+static u32 ui_text_length(const char *text)
+{
+    u32 length = 0u;
+    if (text == 0) return 0u;
+    while (text[length] != '\0' && length < 4096u) ++length;
+    return length;
+}
+
+static int ui_text_equal(const char *left, const char *right)
+{
+    if (left == 0 || right == 0) return 0;
+    u32 i = 0u;
+    while (left[i] != '\0' && right[i] != '\0') {
+        if (left[i] != right[i]) return 0;
+        ++i;
+    }
+    return left[i] == right[i];
+}
+
+static u16 ui_current_directory(void)
+{
+    return ui_directory_depth == 0u ? FS_ROOT : ui_directory_stack[ui_directory_depth - 1u];
+}
+
+static void ui_refresh_file_list(void)
+{
+    ui_file_count = 0u;
+    if (!fs_is_mounted()) {
+        ui_set_message("NO DISK AVAILABLE");
+        return;
+    }
+    u32 count = 0u;
+    if (!fs_list(ui_current_directory(), ui_file_entries, FS_DIRECTORY_LIMIT, &count)) {
+        ui_set_message("DIRECTORY READ FAILED");
+        return;
+    }
+    ui_file_count = count;
+    if (ui_file_count == 0u) ui_file_selection = 0u;
+    else if (ui_file_selection >= ui_file_count) ui_file_selection = ui_file_count - 1u;
+}
+
+static void ui_select_name(const char *name)
+{
+    for (u32 i = 0u; i < ui_file_count; ++i) {
+        if (ui_text_equal(ui_file_entries[i].name, name)) {
+            ui_file_selection = i;
+            return;
+        }
+    }
+}
+
+static int editor_open_file(u16 index, const char *name, enum ui_screen return_screen)
+{
+    u32 size = 0u;
+    if (!fs_read_file(index, editor_buffer, UI_EDITOR_CAPACITY, &size)) {
+        ui_set_message("OPEN FAILED OR FILE TOO LARGE");
+        return 0;
+    }
+    editor_file_index = index;
+    editor_size = size;
+    editor_cursor = size;
+    editor_first_line = 0u;
+    editor_return_screen = return_screen;
+    editor_dirty = 0;
+    editor_exit_confirm = 0;
+    ui_copy_text(editor_filename, sizeof(editor_filename), name);
+    ui_set_message("FILE OPENED");
+    active_screen = UI_SCREEN_EDITOR;
+    serial_write("MICHAEL_OC_EDITOR_OPENED=");
+    serial_write(editor_filename);
+    serial_write(" SIZE=");
+    serial_write_hex(editor_size);
+    serial_write("\r\n");
+    return 1;
+}
+
+static int editor_open_welcome(void)
+{
+    static const u8 welcome[] =
+        "WELCOME TO MICHAEL OC\n"
+        "Edit this document and press F2 to save.\n"
+        "Use the file manager to create and organize files.\n";
+    if (!fs_is_mounted()) {
+        ui_set_message("NO DISK AVAILABLE");
+        return 0;
+    }
+    u16 index = 0u;
+    if (!fs_lookup(FS_ROOT, "welcome.txt", &index)) {
+        if (!fs_create_file(FS_ROOT, "welcome.txt", &index) ||
+            !fs_write_file(index, welcome, (u32)sizeof(welcome) - 1u)) {
+            ui_set_message("COULD NOT CREATE WELCOME FILE");
+            return 0;
+        }
+    }
+    return editor_open_file(index, "welcome.txt", UI_SCREEN_HOME);
+}
+
+static char ui_scancode_to_ascii(u8 scancode)
+{
+    switch (scancode) {
+    case 0x02: return '1'; case 0x03: return '2'; case 0x04: return '3';
+    case 0x05: return '4'; case 0x06: return '5'; case 0x07: return '6';
+    case 0x08: return '7'; case 0x09: return '8'; case 0x0A: return '9';
+    case 0x0B: return '0'; case 0x0C: return '-';
+    case 0x10: return 'q'; case 0x11: return 'w'; case 0x12: return 'e';
+    case 0x13: return 'r'; case 0x14: return 't'; case 0x15: return 'y';
+    case 0x16: return 'u'; case 0x17: return 'i'; case 0x18: return 'o';
+    case 0x19: return 'p'; case 0x1E: return 'a'; case 0x1F: return 's';
+    case 0x20: return 'd'; case 0x21: return 'f'; case 0x22: return 'g';
+    case 0x23: return 'h'; case 0x24: return 'j'; case 0x25: return 'k';
+    case 0x26: return 'l'; case 0x2C: return 'z'; case 0x2D: return 'x';
+    case 0x2E: return 'c'; case 0x2F: return 'v'; case 0x30: return 'b';
+    case 0x31: return 'n'; case 0x32: return 'm'; case 0x33: return ',';
+    case 0x34: return '.'; case 0x39: return ' ';
+    default: return '\0';
+    }
+}
+
+static void draw_file_manager(void)
+{
+    draw_window_frame("FILE MANAGER");
+    ui_refresh_file_list();
+    mono_draw_text(80u, 118u, ui_directory_depth == 0u ? "ROOT" : "SUBDIRECTORY", 1u, 0);
+    mono_draw_text(250u, 118u, "N NEW D DIR R RENAME X DELETE", 1u, 0);
+    mono_draw_text(80u, 132u, "ENTER OPEN BACKSPACE PARENT", 1u, 0);
+    if (ui_file_count == 0u) mono_draw_text(100u, 165u, "DIRECTORY IS EMPTY", 1u, 0);
+
+    const u32 count = ui_file_count < UI_FILE_VISIBLE_ENTRIES ?
+                      ui_file_count : UI_FILE_VISIBLE_ENTRIES;
+    for (u32 i = 0u; i < count; ++i) {
+        const u32 y = 155u + i * 25u;
+        const int selected = i == ui_file_selection;
+        mono_fill_rect(80u, y - 2u, 640u, 18u, selected);
+        mono_draw_text(92u, y, ui_file_entries[i].name, 1u, selected);
+        mono_draw_text(610u, y,
+                       ui_file_entries[i].type == FS_ENTRY_DIRECTORY ? "DIR" : "FILE",
+                       1u, selected);
+    }
+    mono_draw_text(80u, 468u, ui_status_message, 1u, 0);
+    mono_draw_text(80u, 492u, "F2 REFRESH  N FILE  D DIRECTORY  R RENAME", 1u, 0);
+
+    if (ui_file_dialog != UI_FILE_DIALOG_NONE) {
+        mono_fill_rect(125u, 215u, 550u, 112u, 1);
+        mono_outline_rect(125u, 215u, 550u, 112u, 0);
+        if (ui_file_dialog == UI_FILE_DIALOG_NEW_FILE)
+            mono_draw_text(155u, 238u, "NEW FILE NAME", 1u, 1);
+        else if (ui_file_dialog == UI_FILE_DIALOG_NEW_DIRECTORY)
+            mono_draw_text(155u, 238u, "NEW DIRECTORY NAME", 1u, 1);
+        else if (ui_file_dialog == UI_FILE_DIALOG_RENAME)
+            mono_draw_text(155u, 238u, "RENAME TO", 1u, 1);
+        else {
+            mono_draw_text(155u, 238u, "DELETE SELECTED ITEM?", 1u, 1);
+            mono_draw_text(155u, 265u, "PRESS Y TO DELETE OR N TO CANCEL", 1u, 1);
+        }
+        if (ui_file_dialog != UI_FILE_DIALOG_DELETE_CONFIRM) {
+            mono_draw_text(155u, 270u, ui_file_dialog_buffer, 1u, 1);
+            mono_fill_rect(155u + ui_file_dialog_length * 6u, 281u, 5u, 1u, 0);
+        }
+    }
+}
+
+static void editor_cursor_visual_position(u32 *line_out, u32 *column_out)
+{
+    u32 line = 0u, column = 0u;
+    const u32 stop = editor_cursor < editor_size ? editor_cursor : editor_size;
+    for (u32 i = 0u; i < stop; ++i) {
+        if (editor_buffer[i] == '\n') {
+            ++line;
+            column = 0u;
+        } else {
+            if (column >= UI_EDITOR_LINE_WIDTH) {
+                ++line;
+                column = 0u;
+            }
+            ++column;
+        }
+    }
+    if (column >= UI_EDITOR_LINE_WIDTH &&
+        (editor_cursor >= editor_size || editor_buffer[editor_cursor] != '\n')) {
+        ++line;
+        column = 0u;
+    }
+    *line_out = line;
+    *column_out = column;
+}
+
+static int editor_find_visual_line(u32 wanted, u32 *start_out, u32 *end_out)
+{
+    u32 line = 0u, column = 0u, start = 0u;
+    for (u32 pos = 0u; pos < editor_size; ++pos) {
+        const u8 ch = editor_buffer[pos];
+        if (ch == '\n') {
+            if (line == wanted) {
+                *start_out = start;
+                *end_out = pos;
+                return 1;
+            }
+            ++line;
+            column = 0u;
+            start = pos + 1u;
+            continue;
+        }
+        if (column >= UI_EDITOR_LINE_WIDTH) {
+            if (line == wanted) {
+                *start_out = start;
+                *end_out = pos;
+                return 1;
+            }
+            ++line;
+            column = 0u;
+            start = pos;
+        }
+        ++column;
+    }
+    if (line == wanted) {
+        *start_out = start;
+        *end_out = editor_size;
+        return 1;
+    }
+    return 0;
+}
+
+static void editor_move_vertical(int down)
+{
+    u32 line = 0u, column = 0u;
+    editor_cursor_visual_position(&line, &column);
+    if (!down && line == 0u) return;
+    const u32 target = down ? line + 1u : line - 1u;
+    u32 start = 0u, end = 0u;
+    if (!editor_find_visual_line(target, &start, &end)) return;
+    const u32 length = end - start;
+    editor_cursor = start + (column < length ? column : length);
+}
+
+static void draw_text_editor(void)
+{
+    draw_window_frame("TEXT EDITOR");
+    mono_draw_text(80u, 118u, editor_filename, 1u, 0);
+    if (editor_dirty) mono_draw_text(480u, 118u, "UNSAVED", 1u, 0);
+
+    u32 cursor_line = 0u, cursor_column = 0u;
+    editor_cursor_visual_position(&cursor_line, &cursor_column);
+    if (cursor_line < editor_first_line) editor_first_line = cursor_line;
+    else if (cursor_line >= editor_first_line + UI_EDITOR_VISIBLE_LINES)
+        editor_first_line = cursor_line - UI_EDITOR_VISIBLE_LINES + 1u;
+
+    u32 line = 0u, column = 0u;
+    for (u32 pos = 0u; pos < editor_size; ++pos) {
+        const u8 ch = editor_buffer[pos];
+        if (ch != '\n' && column >= UI_EDITOR_LINE_WIDTH) {
+            ++line;
+            column = 0u;
+        }
+        if (pos == editor_cursor && line >= editor_first_line &&
+            line < editor_first_line + UI_EDITOR_VISIBLE_LINES) {
+            mono_fill_rect(80u + column * 6u,
+                           142u + (line - editor_first_line) * 18u + 8u,
+                           5u, 1u, 1);
+        }
+        if (ch == '\n') {
+            ++line;
+            column = 0u;
+            continue;
+        }
+        if (line >= editor_first_line &&
+            line < editor_first_line + UI_EDITOR_VISIBLE_LINES) {
+            mono_draw_char(80u + column * 6u,
+                           142u + (line - editor_first_line) * 18u,
+                           (char)ch, 1u, 0);
+        }
+        ++column;
+    }
+    if (editor_cursor == editor_size) {
+        if (column >= UI_EDITOR_LINE_WIDTH) { ++line; column = 0u; }
+        if (line >= editor_first_line &&
+            line < editor_first_line + UI_EDITOR_VISIBLE_LINES) {
+            mono_fill_rect(80u + column * 6u,
+                           142u + (line - editor_first_line) * 18u + 8u,
+                           5u, 1u, 1);
+        }
+    }
+    mono_draw_text(80u, 475u, ui_status_message, 1u, 0);
+    mono_draw_text(80u, 496u, "F2 SAVE  ARROWS MOVE  BACKSPACE DELETE", 1u, 0);
+    if (editor_exit_confirm) {
+        mono_fill_rect(135u, 225u, 530u, 80u, 1);
+        mono_outline_rect(135u, 225u, 530u, 80u, 0);
+        mono_draw_text(165u, 245u, "UNSAVED CHANGES", 1u, 1);
+        mono_draw_text(165u, 270u, "F2 SAVE OR PRESS ESC AGAIN TO DISCARD", 1u, 1);
+    }
+}
+
 static void render_active_screen(void)
 {
     switch (active_screen) {
@@ -456,6 +808,12 @@ static void render_active_screen(void)
     case UI_SCREEN_FRAMEBUFFER:
         draw_framebuffer_screen();
         break;
+    case UI_SCREEN_FILES:
+        draw_file_manager();
+        break;
+    case UI_SCREEN_EDITOR:
+        draw_text_editor();
+        break;
     case UI_SCREEN_HOME:
     default:
         draw_home_screen();
@@ -463,14 +821,315 @@ static void render_active_screen(void)
     }
 }
 
-static int handle_ui_scancode(u8 scancode)
+
+static void ui_start_file_dialog(enum ui_file_dialog_mode mode)
 {
-    /* Ignore extended prefixes and key-release events in this initial driver. */
-    if (scancode == 0xE0u || scancode == 0xE1u || (scancode & 0x80u) != 0u) {
+    ui_file_dialog = mode;
+    ui_file_dialog_length = 0u;
+    for (u32 i = 0u; i < sizeof(ui_file_dialog_buffer); ++i)
+        ui_file_dialog_buffer[i] = '\0';
+
+    if (mode == UI_FILE_DIALOG_RENAME && ui_file_selection < ui_file_count) {
+        ui_copy_text(ui_file_dialog_buffer, sizeof(ui_file_dialog_buffer),
+                     ui_file_entries[ui_file_selection].name);
+        ui_file_dialog_length = ui_text_length(ui_file_dialog_buffer);
+    }
+    if (mode == UI_FILE_DIALOG_NEW_FILE)
+        serial_write("MICHAEL_OC_FILE_DIALOG=NEW_FILE\r\n");
+    else if (mode == UI_FILE_DIALOG_NEW_DIRECTORY)
+        serial_write("MICHAEL_OC_FILE_DIALOG=NEW_DIRECTORY\r\n");
+    else if (mode == UI_FILE_DIALOG_RENAME)
+        serial_write("MICHAEL_OC_FILE_DIALOG=RENAME\r\n");
+    else if (mode == UI_FILE_DIALOG_DELETE_CONFIRM)
+        serial_write("MICHAEL_OC_FILE_DIALOG=DELETE_CONFIRM\r\n");
+}
+
+static void ui_finish_file_dialog(void)
+{
+    const enum ui_file_dialog_mode mode = ui_file_dialog;
+    ui_file_dialog = UI_FILE_DIALOG_NONE;
+
+    if (mode == UI_FILE_DIALOG_DELETE_CONFIRM) {
+        if (ui_file_selection >= ui_file_count) {
+            ui_set_message("NOTHING SELECTED");
+            return;
+        }
+        u16 index = 0u;
+        if (!fs_lookup(ui_current_directory(), ui_file_entries[ui_file_selection].name, &index) ||
+            !fs_delete(index)) {
+            ui_set_message("DELETE FAILED");
+            return;
+        }
+        ui_set_message("ITEM DELETED");
+        ui_file_selection = 0u;
+        ui_refresh_file_list();
+        return;
+    }
+
+    if (ui_file_dialog_length == 0u) {
+        ui_set_message("NAME CANNOT BE EMPTY");
+        return;
+    }
+
+    if (mode == UI_FILE_DIALOG_NEW_FILE) {
+        char name[32];
+        ui_copy_text(name, sizeof(name), ui_file_dialog_buffer);
+        u16 index = 0u;
+        if (!fs_create_file(ui_current_directory(), name, &index)) {
+            ui_set_message("CREATE FILE FAILED");
+            return;
+        }
+        serial_write("MICHAEL_OC_FILE_CREATED\r\n");
+        (void)editor_open_file(index, name, UI_SCREEN_FILES);
+        return;
+    }
+
+    if (mode == UI_FILE_DIALOG_NEW_DIRECTORY) {
+        char name[32];
+        ui_copy_text(name, sizeof(name), ui_file_dialog_buffer);
+        u16 index = 0u;
+        if (!fs_make_directory(ui_current_directory(), name, &index)) {
+            ui_set_message("CREATE DIRECTORY FAILED");
+            return;
+        }
+        ui_set_message("DIRECTORY CREATED");
+        ui_file_selection = 0u;
+        ui_refresh_file_list();
+        ui_select_name(name);
+        serial_write("MICHAEL_OC_DIRECTORY_CREATED\r\n");
+        return;
+    }
+
+    if (mode == UI_FILE_DIALOG_RENAME) {
+        char name[32];
+        ui_copy_text(name, sizeof(name), ui_file_dialog_buffer);
+        if (ui_file_selection >= ui_file_count) {
+            ui_set_message("NOTHING SELECTED");
+            return;
+        }
+        u16 index = 0u;
+        if (!fs_lookup(ui_current_directory(), ui_file_entries[ui_file_selection].name, &index) ||
+            !fs_rename(index, name)) {
+            ui_set_message("RENAME FAILED");
+            return;
+        }
+        ui_set_message("ITEM RENAMED");
+        ui_refresh_file_list();
+        ui_select_name(name);
+        serial_write("MICHAEL_OC_ITEM_RENAMED\r\n");
+    }
+}
+
+static int ui_handle_file_manager_scancode(u8 scancode)
+{
+    if (ui_file_dialog != UI_FILE_DIALOG_NONE) {
+        if (ui_file_dialog == UI_FILE_DIALOG_DELETE_CONFIRM) {
+            if (scancode == 0x15u) {
+                ui_finish_file_dialog();
+                return 1;
+            }
+            if (scancode == 0x31u) {
+                ui_file_dialog = UI_FILE_DIALOG_NONE;
+                ui_set_message("DELETE CANCELLED");
+                return 1;
+            }
+            return 0;
+        }
+        if (scancode == 0x1Cu) {
+            ui_finish_file_dialog();
+            return 1;
+        }
+        if (scancode == 0x0Eu) {
+            if (ui_file_dialog_length > 0u)
+                ui_file_dialog_buffer[--ui_file_dialog_length] = '\0';
+            return 1;
+        }
+        const char ch = ui_scancode_to_ascii(scancode);
+        if (ch != '\0' && ui_file_dialog_length < FS_NAME_MAX) {
+            ui_file_dialog_buffer[ui_file_dialog_length++] = ch;
+            ui_file_dialog_buffer[ui_file_dialog_length] = '\0';
+            return 1;
+        }
         return 0;
     }
 
+    if (scancode == 0x48u) {
+        if (ui_file_count != 0u && ui_file_selection > 0u) --ui_file_selection;
+        return 1;
+    }
+    if (scancode == 0x50u) {
+        if (ui_file_count != 0u && ui_file_selection + 1u < ui_file_count) ++ui_file_selection;
+        return 1;
+    }
+    if (scancode == 0x0Eu) {
+        if (ui_directory_depth > 0u) {
+            --ui_directory_depth;
+            ui_file_selection = 0u;
+            ui_set_message("PARENT DIRECTORY");
+        } else ui_set_message("ALREADY AT ROOT");
+        return 1;
+    }
+    if (scancode == 0x3Cu) {
+        ui_set_message("DIRECTORY REFRESHED");
+        ui_refresh_file_list();
+        return 1;
+    }
+    if (scancode == 0x1Cu) {
+        if (ui_file_selection >= ui_file_count) return 0;
+        u16 index = 0u;
+        const fs_entry_t *entry = &ui_file_entries[ui_file_selection];
+        if (!fs_lookup(ui_current_directory(), entry->name, &index)) {
+            ui_set_message("ENTRY NOT FOUND");
+            return 1;
+        }
+        if (entry->type == FS_ENTRY_DIRECTORY) {
+            if (ui_directory_depth >= FS_DIRECTORY_LIMIT) {
+                ui_set_message("DIRECTORY DEPTH LIMIT");
+                return 1;
+            }
+            ui_directory_stack[ui_directory_depth++] = index;
+            ui_file_selection = 0u;
+            ui_set_message("DIRECTORY OPENED");
+        } else (void)editor_open_file(index, entry->name, UI_SCREEN_FILES);
+        return 1;
+    }
+    if (scancode == 0x31u) {
+        ui_start_file_dialog(UI_FILE_DIALOG_NEW_FILE);
+        return 1;
+    }
+    if (scancode == 0x20u) {
+        ui_start_file_dialog(UI_FILE_DIALOG_NEW_DIRECTORY);
+        return 1;
+    }
+    if (scancode == 0x13u) {
+        if (ui_file_selection < ui_file_count) ui_start_file_dialog(UI_FILE_DIALOG_RENAME);
+        else ui_set_message("SELECT AN ITEM FIRST");
+        return 1;
+    }
+    if (scancode == 0x2Du) {
+        if (ui_file_selection < ui_file_count) ui_start_file_dialog(UI_FILE_DIALOG_DELETE_CONFIRM);
+        else ui_set_message("SELECT AN ITEM FIRST");
+        return 1;
+    }
+    return 0;
+}
+
+static void editor_insert_byte(u8 value)
+{
+    if (editor_size >= UI_EDITOR_CAPACITY) {
+        ui_set_message("EDITOR BUFFER FULL");
+        return;
+    }
+    for (u32 i = editor_size; i > editor_cursor; --i)
+        editor_buffer[i] = editor_buffer[i - 1u];
+    editor_buffer[editor_cursor++] = value;
+    ++editor_size;
+    editor_dirty = 1;
+    editor_exit_confirm = 0;
+    ui_set_message("UNSAVED CHANGES");
+}
+
+static void editor_save(void)
+{
+    if (!fs_write_file(editor_file_index, editor_buffer, editor_size)) {
+        ui_set_message("SAVE FAILED");
+        return;
+    }
+    editor_dirty = 0;
+    editor_exit_confirm = 0;
+    ui_set_message("SAVED TO DISK");
+    serial_write("MICHAEL_OC_EDITOR_SAVED\r\n");
+    serial_write("MICHAEL_OC_EDITOR_SIZE=");
+    serial_write_hex(editor_size);
+    serial_write("\r\n");
+}
+
+static int ui_handle_editor_scancode(u8 scancode)
+{
+    if (scancode == 0x3Cu) { editor_save(); return 1; }
+    if (scancode == 0x4Bu) {
+        if (editor_cursor > 0u) --editor_cursor;
+        editor_exit_confirm = 0;
+        return 1;
+    }
+    if (scancode == 0x4Du) {
+        if (editor_cursor < editor_size) ++editor_cursor;
+        editor_exit_confirm = 0;
+        return 1;
+    }
+    if (scancode == 0x48u || scancode == 0x50u) {
+        editor_move_vertical(scancode == 0x50u);
+        editor_exit_confirm = 0;
+        return 1;
+    }
+    if (scancode == 0x47u) {
+        while (editor_cursor > 0u && editor_buffer[editor_cursor - 1u] != '\n')
+            --editor_cursor;
+        return 1;
+    }
+    if (scancode == 0x4Fu) {
+        while (editor_cursor < editor_size && editor_buffer[editor_cursor] != '\n')
+            ++editor_cursor;
+        return 1;
+    }
+    if (scancode == 0x0Eu) {
+        if (editor_cursor > 0u) {
+            for (u32 i = editor_cursor - 1u; i + 1u < editor_size; ++i)
+                editor_buffer[i] = editor_buffer[i + 1u];
+            --editor_cursor;
+            --editor_size;
+            editor_dirty = 1;
+            editor_exit_confirm = 0;
+            ui_set_message("UNSAVED CHANGES");
+        }
+        return 1;
+    }
+    if (scancode == 0x53u) {
+        if (editor_cursor < editor_size) {
+            for (u32 i = editor_cursor; i + 1u < editor_size; ++i)
+                editor_buffer[i] = editor_buffer[i + 1u];
+            --editor_size;
+            editor_dirty = 1;
+            editor_exit_confirm = 0;
+            ui_set_message("UNSAVED CHANGES");
+        }
+        return 1;
+    }
+    if (scancode == 0x1Cu) {
+        editor_insert_byte((u8)'\n');
+        return 1;
+    }
+    const char ch = ui_scancode_to_ascii(scancode);
+    if (ch != '\0') {
+        editor_insert_byte((u8)ch);
+        return 1;
+    }
+    return 0;
+}
+
+static int handle_ui_scancode(u8 scancode)
+{
+    if (scancode == 0xE0u || scancode == 0xE1u ||
+        (scancode & 0x80u) != 0u) return 0;
+
     if (scancode == 0x01u) {
+        if (active_screen == UI_SCREEN_EDITOR) {
+            if (editor_dirty && !editor_exit_confirm) {
+                editor_exit_confirm = 1;
+                ui_set_message("UNSAVED CHANGES - F2 SAVE OR ESC AGAIN");
+                return 1;
+            }
+            active_screen = editor_return_screen;
+            editor_dirty = 0;
+            editor_exit_confirm = 0;
+            ui_set_message("EDITOR CLOSED");
+            return 1;
+        }
+        if (active_screen == UI_SCREEN_FILES && ui_file_dialog != UI_FILE_DIALOG_NONE) {
+            ui_file_dialog = UI_FILE_DIALOG_NONE;
+            ui_set_message("DIALOG CANCELLED");
+            return 1;
+        }
         if (active_screen != UI_SCREEN_HOME) {
             active_screen = UI_SCREEN_HOME;
             return 1;
@@ -478,28 +1137,31 @@ static int handle_ui_scancode(u8 scancode)
         return 0;
     }
 
+    if (active_screen == UI_SCREEN_FILES) return ui_handle_file_manager_scancode(scancode);
+    if (active_screen == UI_SCREEN_EDITOR) return ui_handle_editor_scancode(scancode);
+
     if (active_screen == UI_SCREEN_HOME) {
-        if (scancode == 0x02u) {
-            active_screen = UI_SCREEN_SYSTEM;
+        if (scancode == 0x02u) { active_screen = UI_SCREEN_SYSTEM; return 1; }
+        if (scancode == 0x03u) { active_screen = UI_SCREEN_KEYBOARD; last_key_scancode = 0u; return 1; }
+        if (scancode == 0x04u) { active_screen = UI_SCREEN_FRAMEBUFFER; return 1; }
+        if (scancode == 0x05u) {
+            ui_directory_depth = 0u;
+            ui_file_selection = 0u;
+            ui_file_dialog = UI_FILE_DIALOG_NONE;
+            ui_set_message("READY");
+            active_screen = UI_SCREEN_FILES;
             return 1;
         }
-        if (scancode == 0x03u) {
-            active_screen = UI_SCREEN_KEYBOARD;
-            last_key_scancode = 0u;
-            return 1;
-        }
-        if (scancode == 0x04u) {
-            active_screen = UI_SCREEN_FRAMEBUFFER;
+        if (scancode == 0x06u) {
+            (void)editor_open_welcome();
             return 1;
         }
         return 0;
     }
-
     if (active_screen == UI_SCREEN_KEYBOARD) {
         last_key_scancode = scancode;
         return 1;
     }
-
     return 0;
 }
 
@@ -701,6 +1363,12 @@ static void log_ui_screen_event(void)
         break;
     case UI_SCREEN_FRAMEBUFFER:
         serial_write("MICHAEL_OC_UI_SCREEN=FRAMEBUFFER\r\n");
+        break;
+    case UI_SCREEN_FILES:
+        serial_write("MICHAEL_OC_UI_SCREEN=FILES\r\n");
+        break;
+    case UI_SCREEN_EDITOR:
+        serial_write("MICHAEL_OC_UI_SCREEN=EDITOR\r\n");
         break;
     case UI_SCREEN_HOME:
     default:

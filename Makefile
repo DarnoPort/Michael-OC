@@ -31,7 +31,7 @@ ASFLAGS := -m32 -ffreestanding -fno-pie -fno-pic \
 	-fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables
 LDFLAGS := -m elf_i386 -T linker.ld -nostdlib
 
-.PHONY: all kernel iso run test test-exception test-storage clean check-tools
+.PHONY: all kernel iso run test test-exception test-storage test-apps clean check-tools
 
 all: check-tools iso
 
@@ -169,6 +169,7 @@ test: $(ISO) $(DISK_IMAGE)
 	python3 scripts/test_keyboard_input.py --qemu $(QEMU) --iso $(ISO) --disk $(DISK_IMAGE) --work-dir $(BUILD_DIR)
 	$(MAKE) test-exception
 	$(MAKE) test-storage
+	$(MAKE) test-apps
 
 test-exception: $(EXCEPTION_TEST_ISO)
 	@command -v $(QEMU) >/dev/null || { echo "Missing $(QEMU); install qemu-system-x86"; exit 1; }
@@ -178,6 +179,10 @@ test-exception: $(EXCEPTION_TEST_ISO)
 test-storage: $(STORAGE_TEST_ISO)
 	@command -v $(QEMU) >/dev/null || { echo "Missing $(QEMU); install qemu-system-x86"; exit 1; }
 	python3 scripts/test_storage.py --qemu $(QEMU) --iso $(STORAGE_TEST_ISO) --disk $(STORAGE_TEST_DIR)/test-disk.img --work-dir $(STORAGE_TEST_DIR) --create-disk-script scripts/create_disk_image.py
+
+test-apps: $(ISO)
+	@command -v $(QEMU) >/dev/null || { echo "Missing $(QEMU); install qemu-system-x86"; exit 1; }
+	python3 scripts/test_apps.py --qemu $(QEMU) --iso $(ISO) --disk $(STORAGE_TEST_DIR)/ui-test-disk.img --work-dir $(STORAGE_TEST_DIR) --create-disk-script scripts/create_disk_image.py
 
 clean:
 	rm -rf $(BUILD_DIR)

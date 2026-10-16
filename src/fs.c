@@ -356,8 +356,9 @@ int fs_write_file(u16 index, const u8 *buffer, u32 size)
 int fs_rename(u16 index, const char *new_name)
 {
     if (!mounted || index >= FS_DIRECTORY_LIMIT || directory[index].type == 0u ||
-        !valid_name(new_name) || name_exists(directory[index].parent_index, new_name))
-        return 0;
+        !valid_name(new_name)) return 0;
+    if (text_equal(directory[index].name, new_name)) return 1;
+    if (name_exists(directory[index].parent_index, new_name)) return 0;
     char old_name[32];
     for (u32 i = 0u; i < sizeof(old_name); ++i) {
         old_name[i] = directory[index].name[i];
