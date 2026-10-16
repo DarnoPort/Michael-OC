@@ -28,14 +28,15 @@
 | Monochrome framebuffer rendering | Implemented, smoke-tested | GRUB mode 800x600x32; only black and full RGB white are emitted |
 | Keyboard-driven diagnostic pages | Implemented, smoke-tested | Home, system status, keyboard test and framebuffer test |
 | Keyboard handling state logic | Implemented, self-tested | Navigation, make-code handling, break-code filtering and Escape return |
-| PS/2 keyboard polling | Implemented, end-to-end QEMU test | QEMU HMP injects 2, A and Escape; CI checks page transition and scan-code marker |
+| PS/2 keyboard IRQ1 | Implemented, end-to-end QEMU test | PIC vector 33; IRQ handler queues scan bytes; QEMU HMP injects 2, A and Escape and CI checks page transition and scan-code marker |
 | Multiboot memory-map parsing | Implemented, smoke-tested | Parses variable-sized entries and frees only complete pages covered by type-1 RAM ranges |
 | Physical page allocator | Implemented, smoke-tested | Two bitmaps track used and allocated frames below 4 GiB; 4096-byte pages; free count and double-free protection |
 | Memory-region reservation | Implemented, smoke-tested | Reserves low 1 MiB, kernel image including BSS, Multiboot info/map, boot modules and framebuffer pages |
 | Physical-memory allocator self-test | Implemented, smoke-tested | Allocates a frame, verifies alignment/read/write/count restoration and rejects double-free |
-| IDT setup | Implemented, smoke-tested | Boot installs 32 exception gates; lidt/sidt base and limit check emits a marker required by CI |
-| CPU exception stubs and fatal report | Implemented, not yet runtime-verified | Assembly stubs account for vectors with/without CPU error codes; handler reports vector, error code, EIP, CS and EFLAGS then halts. CI does not deliberately trigger a fault yet |
-| Hardware IRQ/PIC handling | Not implemented | IF remains disabled; no IRQ remapping, EOI handling, timer IRQ or keyboard IRQ |
+| IDT setup | Implemented, smoke-tested | Boot installs exception gates 0–31 and PIC interrupt gates 32–47; lidt/sidt base and limit check emits a marker required by CI |
+| CPU exception stubs and fatal report | Implemented, smoke-tested | Separate test ISO executes int3; CI verifies vector 3/breakpoint diagnostics and the guest halt |
+| PIC remapping and EOI handling | Implemented, smoke-tested for keyboard IRQ | Legacy PIC remapped to 0x20/0x28; IRQ1 is enabled, other lines stay masked; EOI is sent to the appropriate PIC |
+| Keyboard scan-code queue | Implemented, end-to-end QEMU test | IRQ handler only queues bytes; the main loop processes them and uses a CLI plus STI/HLT wait to avoid lost wakeups |
 | Paging / virtual memory | Not implemented | Allocator still returns directly addressable physical addresses; page tables and virtual address spaces are absent |
 | Mouse input | Not implemented | No mouse packet decoder or pointer yet |
 | Persistent disk/filesystem | Not implemented | No block driver, filesystem or persistent user files yet |
@@ -48,9 +49,8 @@
 - src/boot.S — Multiboot header, stack setup, IDT initialization call and C entry transfer.
 - src/multiboot.h — shared Multiboot info and memory-map structures.
 - src/memory.h and src/memory.c — physical frame allocator and allocator self-test.
-- src/interrupts.h, src/interrupts.c and src/interrupts.S — IDT gates, exception stubs and fatal serial diagnostics.
-- src/interrupts.h, src/interrupts.c and src/interrupts.S — IDT gates, exception stubs and fatal serial diagnostics.
-- src/kernel.c — serial diagnostics, one-bit canvas, monochrome UI pages, keyboard state handler and polled PS/2 input.
+- src/interrupts.h, src/interrupts.c and src/interrupts.S — IDT gates, exception stubs, PIC remapping/EOI and keyboard IRQ queue.
+- src/kernel.c — serial diagnostics, one-bit canvas, monochrome UI pages, keyboard state handler and IRQ-queued PS/2 input.
 - linker.ld — kernel image layout and exported kernel bounds.
 - grub/grub.cfg — video mode, serial diagnostics and boot entry.
 - Makefile — kernel/ISO build, tool checks, run and test targets.
@@ -76,14 +76,14 @@ ISO output: build/michael-oc.iso.
 
 ## Latest verified milestone
 
-GitHub Actions run [38902485702](https://github.com/DarnoPort/Michael-OC/actions/runs/38902485702) passed for commit 3e98a755e18600be627ce5fae77bc645f4eb5364. CI compiled the new assembly/C interrupt module, checked the Multiboot header, built the ISO, booted QEMU and required MICHAEL_OC_IDT_OK alongside the existing kernel, allocator, graphics and input markers. The existing HMP keyboard interaction test also passed. This verifies IDT initialization and continued boot/UI behaviour; it does not independently force an exception to execute the fatal-report branch.
+GitHub Actions run [38903736024](https://github.com/DarnoPort/Michael-OC/actions/runs/38903736024) passed for commit c2c35d9b8abf919344c11e9abd3cf8da95afc6ca. CI built both normal and exception-test ISOs, verified IDT/PIC/keyboard startup, injected keyboard events through QEMU HMP, and triggered INT3 in the test-only image. The serial log reported vector 3 (breakpoint) and the halted-guest message. A subsequent commit adds an atomic queue-empty/HLT wait to close a lost-wakeup race; it must pass CI before being marked verified.
 
 The physical allocator remains a pre-paging allocator: it tracks RAM below 4 GiB in a bitmap in kernel BSS and assumes a single-core boot environment. Its self-test accesses the allocated physical address directly because paging is not enabled.
 
 ## Next tasks
 
-1. Add CPU exception self-tests in a separate test boot mode, then add PIC remapping and hardware IRQ dispatch with explicit EOI handling.
-2. Implement paging and virtual memory, including page-table creation, mapping/unmapping, and tests for invalid accesses and allocator reservations.
+1. Add a timer driver and tests for remaining IRQ/PIC paths; keep unsupported IRQs masked until a driver is ready.
+2. Implement paging and virtual memory, including page-table creation, mapping/unmapping, and tests for allocator reservations and invalid accesses.
 3. Add a QEMU block device and persistent filesystem; test create/write/read/delete and data survival across a VM restart.
 4. Define a kernel-to-app ABI, an executable format/loader and a safe external-app installation/removal mechanism.
 5. Implement real file manager, editor, system monitor and installer applications using that interface.
@@ -91,4 +91,4 @@ The physical allocator remains a pre-paging allocator: it tracks RAM below 4 GiB
 
 ## Verification rules
 
-A source file existing is not proof it runs. Distinguish boot, allocator self-test, IDT initialization, deliberate exception injection, keyboard input, persistence across restart and full feature completion. Do not mark a feature smoke-tested without a relevant passing test.
+A source file existing is not proof it runs. Distinguish boot, allocator self-test, IDT initialization, deliberate exception injection, keyboard IRQ input, persistence across restart and full feature completion. Do not mark a feature smoke-tested without a relevant passing test.
