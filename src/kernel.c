@@ -748,12 +748,7 @@ static void show_vga_fallback(void)
 }
 
 
-static u32 kernel_text_length(const char *text)
-{
-    u32 size = 0u;
-    while (text[size] != '\0') ++size;
-    return size;
-}
+#ifdef MICHAEL_OC_STORAGE_SELF_TEST
 static int kernel_bytes_equal(const u8 *left, const u8 *right, u32 size)
 {
     for (u32 i = 0u; i < size; ++i)
@@ -833,6 +828,8 @@ static void storage_self_test(void)
     serial_write("MICHAEL_OC_STORAGE_CRUD_OK\r\n");
     halt_forever();
 }
+
+#endif /* MICHAEL_OC_STORAGE_SELF_TEST */
 
 void kernel_main(u32 multiboot_magic, u32 multiboot_info)
 {
