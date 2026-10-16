@@ -1,26 +1,21 @@
 # Michael OC
 
-Michael OC is an independent operating-system project targeting QEMU on Ubuntu Linux. Its key visual requirement is a strictly one-bit user interface: the software canvas stores exactly one bit per pixel, and the renderer outputs only black or full RGB white. This limit applies to the UI only; it does not limit the CPU, kernel, memory, storage, or applications.
+Michael OC is an independent operating-system project targeting QEMU on Ubuntu Linux. Its defining UI requirement is a strict one-bit palette: the software canvas stores one bit per pixel and the framebuffer renderer emits only black or full RGB white. This restriction applies to graphics, not to CPU instructions, memory, disk data, or application logic.
 
 ## Current implementation
 
-- Bootable 32-bit x86 kernel using GRUB Multiboot v1.
-- Kernel bootstrap installs its own flat GDT before relying on fixed segment selectors in the IDT.
-- Reproducible ISO build and automated QEMU tests.
-- 800x600 packed one-bit software canvas and monochrome framebuffer renderer.
-- Keyboard-driven diagnostic UI: home, system status, keyboard test and framebuffer test.
-- Interrupt-driven PS/2 keyboard input (PIC IRQ1) with an end-to-end QEMU key-injection test.
-- ATA PIO access to a QEMU IDE disk and Michael OC FS v1 with nested directories, file read/write, rename and delete.
-- Keyboard-operated file manager and text editor with insert/delete, cursor movement, and F2 save-to-disk.
-- Two-cold-boot QEMU test for persistent file contents and filesystem CRUD.
-- IDT entries for CPU exception vectors 0–31, serial fatal-exception reporting, and a dedicated QEMU `INT3` dispatch test.
-- Multiboot memory-map parser and physical page allocator for fully usable RAM pages below 4 GiB.
-- Boot-time allocator self-test that allocates a page, checks page alignment, writes and reads a test value, frees the page, checks the free-page count, and rejects double-free.
-- Reserved low memory, kernel image, Multiboot data structures, boot modules, and framebuffer pages.
+- Bootable 32-bit x86 kernel using GRUB Multiboot v1 and an owned flat GDT.
+- IDT exception handlers for CPU vectors 0–31, PIC routing, and interrupt-driven PS/2 keyboard input through IRQ1.
+- Reproducible ISO build and automated QEMU integration tests.
+- 800×600 packed one-bit canvas and monochrome framebuffer output.
+- Keyboard-operated system status, keyboard diagnostics, framebuffer test, file manager, and text editor.
+- ATA PIO sector I/O to a QEMU IDE disk, plus MOCFS1 persistent storage with nested directories and file/directory create, list, rename, read, write, and delete operations.
+- File editor with cursor navigation, insertion/deletion, F2 save, and QEMU integration coverage across restarts.
+- MOCApp: a disk-loaded text-script runtime supporting output, key input, branches, an integer register, and basic file-system operations.
+- Fresh virtual-disk image seeded with a runnable welcome.mapp demonstration.
+- Integration test targets for boot markers, keyboard input, exception dispatch, file-system persistence, and UI-driven script execution.
 
-**This is still early OS development, not a completed general-purpose operating system.** The UI currently runs in kernel context. CPU exceptions 0–31 and PIC vectors 32–47 have IDT gates; the PIC is remapped and only keyboard IRQ1 is unmasked. Keyboard scan codes are queued from interrupt context and consumed by the UI event loop. Paging/virtual memory, timer and mouse IRQ drivers, persistent filesystem, userspace, a general executable loader, app installation, and the requested built-in applications remain unfinished.
-
-The system-status page shows the allocator readiness and current count of free physical pages after a successful initialization.
+**Michael OC is still an early-stage OS, not a completed general-purpose operating system.** The UI and MOCApp interpreter currently run in kernel context; applications do not have isolated address spaces or protected user mode. Paging/virtual memory, a system-call ABI, native ELF execution, process scheduling, timer and mouse drivers, and filesystem journaling remain unimplemented. The filesystem and interpreter are deliberately small and have documented limitations.
 
 ## Build requirements (Ubuntu)
 
@@ -34,23 +29,32 @@ From the repository root:
     make
     make run
 
-The bootable ISO is generated at build/michael-oc.iso. The first `make run` also creates a 16 MiB persistent disk at `build/michael-oc-disk.img`; keep that file to preserve user data. In QEMU, press 1 for system status, 2 for the keyboard test, 3 for the framebuffer test, or Escape to return home. On the keyboard-test screen, press keys to see their make scancodes. Keyboard data is delivered by PIC IRQ1 into a small single-producer/single-consumer queue.
+The build creates build/michael-oc.iso. The first make run creates a 16 MiB disk at build/michael-oc-disk.img. Keep that disk image if you want files to persist across QEMU restarts.
 
-Run automated tests:
+Home-screen shortcuts: 1 opens system status, 2 keyboard diagnostics, 3 the framebuffer test, 4 the file manager, and 5 the welcome document in the editor. Press Escape to return to the home screen except when a script is running, where Escape returns to the file manager.
+
+In the file manager, use the arrow keys to select entries, Enter to open files or directories, Backspace to go to the parent directory, N to create a file, D to create a directory, R to rename, X to delete with confirmation, and F2 to refresh. The text editor uses arrows to navigate, Backspace/Delete to edit, Enter for newline, and F2 to save.
+
+## Creating and running an app
+
+A .mapp file is an ordinary text file stored on the virtual disk. Create one in the file manager using N, enter its source in the editor, save with F2, return to the file manager, select the script, and press Enter. Files with the .mapp suffix are interpreted as MOCApp programs; other files open in the editor.
+
+The fresh-disk image includes welcome.mapp, which demonstrates printing, integer arithmetic, writing and reading a file, listing a directory, waiting for a key, and conditional branching. See docs/MOCAPP.md for the language reference and more examples.
+
+Scripts are limited to 16 KiB and 256 source lines. MOCApp is interpreted by the kernel, not native machine code; it has no user-mode isolation and must not be treated as a sandbox for untrusted programs. F1 stops a script; Escape returns to the file manager.
+
+## Tests
 
     make test
 
-The test builds the ISO, verifies the Multiboot header, boots QEMU with an IDE disk, and requires serial markers for kernel entry, IDT setup, filesystem mount, keyboard IRQ1 setup, physical-memory manager self-test, one-bit canvas self-test, UI input-state self-test and framebuffer flush. It then starts QEMU with its HMP monitor and injects key 2, A and Escape. A second, separately compiled diagnostic kernel executes `INT3`; the test checks the exception vector and synthetic error-code reporting.
+The automated suite compiles the kernel, verifies its Multiboot header, boots QEMU headlessly, checks serial startup markers, injects keyboard events through QEMU's monitor, tests exception dispatch using a separately compiled diagnostic kernel, verifies persistent filesystem CRUD across two cold boots, and exercises file-manager/editor/MOCApp workflows. The current run for the latest fix must pass before that change can be described as fully verified.
 
-## Planned development sequence
+## Known limitations and next priorities
 
-Next milestones are PIC setup and hardware IRQ handlers, interrupt-driven keyboard input, paging and virtual memory, mouse support, persistent storage and a filesystem, a stable application ABI and loader, and working built-in applications. Features must be labelled as verified, partial, or not implemented rather than represented by demo-only placeholders.
+- No paging, virtual address spaces, user-mode separation, or process scheduler.
+- The interpreter operates in kernel context and supports only its documented instructions.
+- MOCFS1 is a custom, fixed-table filesystem with contiguous file extents and no journal or crash recovery.
+- No mouse pointer or timer interrupt driver.
+- The UI tools are kernel-resident screens rather than separate protected processes.
 
-
-## On-disk MOCApp scripts
-
-The file manager executes files ending in `.mapp` as MOCApp scripts; other files open in the text editor. Create a text file with that suffix, enter instructions, press F2 to save, return to the file manager, and press Enter on the script. A fresh QEMU disk includes `welcome.mapp` as an example.
-
-Instructions are one per line: `PRINT text`, `CLEAR`, `WAITKEY`, `IFKEY a 6` (branch to zero-based source line 6 when the last printable key was `a`), `JUMP 4`, `SET 10`, `ADD 2`, `SUB 1`, `PRINTNUM`, `LS`, `READ filename.txt`, `WRITE filename.txt some text`, and `EXIT`. Blank and `#` comment lines are ignored but still count toward source-line indices.
-
-Programs are limited to 16 KiB and 256 source lines. This is a genuine disk-loaded scripting runtime, not native machine code: scripts execute in kernel context without process isolation or security boundaries. F1 stops a running script; Escape returns to the file manager.
+Next priorities are tested paging and safe memory mappings, user-mode execution and a stable system-call ABI, filesystem consistency/recovery, and mouse/timer support. Only label a feature as verified when its corresponding test actually passes.

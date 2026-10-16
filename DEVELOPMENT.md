@@ -1,109 +1,84 @@
 # Michael OC development log
 
-## Project baseline
+## Baseline
 
-- Date: 2026-10-16
-- The GitHub repository was initially empty; the project started from a new bootable-kernel baseline.
+- Date: 2026-10-16.
 - Target: Ubuntu Linux + QEMU, 32-bit x86 guest, GRUB Multiboot v1.
-- Toolchain: freestanding C, GNU assembler/binutils, GRUB rescue ISO, xorriso, mtools, QEMU and Python 3 for the QEMU monitor test.
-- The architecture can evolve if necessary, but do not redesign the working boot path without a concrete reason.
+- Toolchain: freestanding C, GNU assembler/binutils, GRUB rescue ISO, xorriso, mtools, QEMU, and Python 3.
+- Preserve the current Multiboot boot route unless tests demonstrate a concrete reason to change it.
 
 ## Status key
 
-- **Implemented, smoke-tested**: exercised by an automated runtime test.
-- **Implemented, not yet runtime-verified**: code exists, but a working system run has not confirmed the behaviour.
-- **Partial**: the foundation works but the full feature is incomplete.
+- **Verified**: the corresponding automated runtime/integration test passed.
+- **Implemented, pending verification**: source exists but the latest changes have not passed runtime tests yet.
+- **Partial**: a feature works at a limited scope.
 - **Not implemented**: work remains.
 
 ## Current status
 
 | Component | Status | Evidence / limitation |
 |---|---|---|
-| Freestanding x86 kernel entry | Implemented, smoke-tested | GRUB enters kernel_main; serial marker checked by make test |
-| Multiboot v1 header | Implemented, smoke-tested | grub-file check passes |
-| Reproducible bootable ISO | Implemented, smoke-tested | make builds build/michael-oc.iso in CI |
-| Kernel linker layout | Implemented, smoke-tested | Separate RX and RW PT_LOAD segments |
-| Bootstrap GDT | Implemented, QEMU-tested | Loads an owned flat code/data GDT before IDT use; exception-dispatch test verifies the code selector works |
-| Serial diagnostics | Implemented, smoke-tested | COM1 output is used by automated tests and diagnosis |
-| Packed one-bit canvas | Implemented, smoke-tested | 800x600 canvas, one bit per pixel; set/clear self-test required by CI |
-| Monochrome framebuffer rendering | Implemented, smoke-tested | GRUB mode 800x600x32; only black and full RGB white are emitted |
-| Keyboard-driven diagnostic pages | Implemented, smoke-tested | Home, system status, keyboard test and framebuffer test |
-| Keyboard handling state logic | Implemented, self-tested | Navigation, make code, break-code filtering and Escape return |
-| PS/2 keyboard IRQ1 | Implemented, end-to-end QEMU test | PIC remapped to 0x20–0x2F; IRQ1 queues make/break scan codes; QEMU HMP test checks page transition, A scan code 0x1E and Escape return |
-| Multiboot memory-map parsing | Implemented, smoke-tested | Parses variable-sized entries and frees only complete pages covered by type-1 RAM ranges |
-| Physical page allocator | Implemented, smoke-tested | Two bitmaps track used and allocated frames below 4 GiB; 4096-byte pages; free count and double-free protection |
-| Memory-region reservation | Implemented, smoke-tested | Reserves low 1 MiB, kernel image including BSS, Multiboot info/map, boot modules and framebuffer |
-| Physical-memory allocator self-test | Implemented, smoke-tested | Allocates one page, checks alignment/count, writes and reads a value, frees and checks count restoration and double-free rejection |
-| Paging / virtual memory | Not implemented | The current allocator returns physical addresses and runs before paging |
-| Mouse input | Not implemented | No mouse packet decoder or pointer yet |
-| CPU exception and PIC/IRQ framework | Implemented, QEMU-tested | IDT gates for CPU vectors 0–31 and PIC vectors 32–47; IRQ1 enabled and queue-backed. Timer, mouse and other device IRQ drivers are not implemented |
-| ATA PIO and persistent filesystem | Implemented; QEMU runtime test pending | New ATA driver, MOCFS1 API, and two-boot persistence test; update status when CI passes |
-| ATA PIO block driver | Implemented; QEMU-tested by storage CI | IDENTIFY plus bounded LBA28 sector reads/writes and cache flush for primary-master IDE |
-| Michael OC FS v1 | Implemented; two-cold-boot QEMU test added | Persistent bitmap, 64-entry hierarchical directory table, create/list/rename/delete, contiguous file read/write; non-journaled custom format |
-| Userspace and system-call API | Not implemented | The UI currently runs in kernel context |
-| External app loading/install/remove | Not implemented | No executable loader, app ABI or package format yet |
-| File manager/editor/monitor/installer apps | Not implemented | These depend on persistent storage and a stable application interface |
+| Multiboot v1 entry and reproducible ISO build | Verified on earlier commit; latest fix pending CI | The previous green workflow built an ISO and started QEMU; this revision must rebuild |
+| Bootstrap GDT and CPU exception IDT | Verified on earlier commit | A separate QEMU INT3 test checked fatal exception reporting |
+| One-bit canvas / framebuffer renderer | Verified on earlier commit | 800×600 one-bit software backing buffer; output uses black or full RGB white |
+| PS/2 keyboard IRQ1 | Verified on earlier commit | QEMU monitor injection test checked UI navigation and scan-code delivery |
+| Physical page allocator | Verified on earlier commit | Parses usable RAM map and self-tests allocation/free; paging is absent |
+| ATA PIO disk driver | Verified by earlier storage test | Primary-master IDE, LBA28, bounded status polling, and cache flush |
+| MOCFS1 persistent filesystem | Verified by earlier storage test | Two-cold-boot persistence and CRUD test; fixed metadata table and contiguous extents |
+| File manager and text editor | Verified on earlier commit | UI test created/saved a file and reopened it after restart |
+| MOCApp on-disk interpreter | Implemented, latest CI pending | Bounded text-script interpreter with PRINT, CLEAR, WAITKEY, IFKEY, JUMP, SET/ADD/SUB, PRINTNUM, LS, READ, WRITE, and EXIT |
+| MOCApp file-manager workflow | Implemented, latest CI pending | .mapp launches from the file manager; F1 stops it and Escape returns |
+| Paging and virtual memory | Not implemented | The allocator returns directly addressable physical addresses |
+| Userspace isolation, syscall ABI, native ELF loader | Not implemented | UI and script interpreter run in kernel context; no protected user processes |
+| Timer and mouse drivers | Not implemented | Only keyboard IRQ1 has an active device handler |
+| Filesystem journaling/recovery | Not implemented | Metadata can become inconsistent if power-off occurs during an update |
 
 ## Source layout
 
-- src/boot.S — Multiboot header, stack, owned flat GDT, and C entry transfer.
-- src/multiboot.h — shared Multiboot info and memory-map structures.
-- src/memory.h and src/memory.c — physical frame allocator and allocator self-test.
-- src/disk.h and src/disk.c — primary-master ATA PIO sector I/O.
-- src/fs.h and src/fs.c — MOCFS1 mount, directory operations, and file read/write.
-- src/kernel.c — monochrome file-manager/editor screens and keyboard application controls.
-- src/kernel.c — serial diagnostics, one-bit canvas, monochrome UI pages, keyboard state handler and polled PS/2 input.
-- src/interrupts.h and src/interrupts.c — IDT setup, descriptor-register verification, PIC remapping, PS/2 IRQ1 handling and a scan-code queue.
-- src/isr_stubs.S — CPU exception stubs, PIC IRQ stubs, and common assembly dispatch paths.
-- linker.ld — kernel image layout and exported kernel bounds.
-- grub/grub.cfg — video mode, serial diagnostics and boot entry.
-- Makefile — kernel/ISO build, run, tool checks, keyboard test, and a separate QEMU exception-dispatch test kernel.
-- scripts/test_keyboard_input.py — QEMU HMP key-injection test.
-- scripts/create_disk_image.py — creates a blank formatted MOCFS1 disk image.
-- scripts/test_storage.py — writes in one QEMU process, verifies in another, and checks filesystem CRUD.
-- scripts/test_apps.py — creates and edits a document through the GUI, restarts QEMU, and reopens it.
-- .github/workflows/build.yml — Ubuntu CI build, QEMU test and ISO artifact upload.
-- README.md — setup, build, run, controls and known limitations.
+- src/boot.S — Multiboot header, stack, and flat GDT setup.
+- src/multiboot.h — Multiboot structures.
+- src/memory.c and src/memory.h — physical frame allocator.
+- src/disk.c and src/disk.h — ATA PIO disk I/O.
+- src/fs.c and src/fs.h — MOCFS1 filesystem.
+- src/interrupts.c, src/interrupts.h, and src/isr_stubs.S — exceptions, PIC routing, and keyboard IRQ queue.
+- src/kernel.c — one-bit UI, file manager/editor, MOCApp parser and interpreter.
+- scripts/create_disk_image.py — creates a fresh MOCFS1 image and seeds welcome.mapp.
+- scripts/test_keyboard_input.py — QEMU keyboard injection.
+- scripts/test_exceptions.py — dedicated exception test kernel.
+- scripts/test_storage.py — persistence and CRUD test over two cold boots.
+- scripts/test_apps.py — editor persistence and MOCApp integration workflow.
+- docs/MOCAPP.md — script format and developer/user guide.
+- Makefile and .github/workflows/build.yml — reproducible build and CI.
 
 ## Build and run
 
-Install on Ubuntu:
+Install the Ubuntu dependencies:
 
     sudo apt update
     sudo apt install build-essential gcc-multilib grub-pc-bin xorriso mtools qemu-system-x86 make python3
 
-From the repository root:
+Then run from the repository root:
 
     make clean
     make
     make test
     make run
 
-ISO output: build/michael-oc.iso.
+The ISO is build/michael-oc.iso. Persistent user files are stored in build/michael-oc-disk.img.
 
-## Latest verified milestone
+## Latest CI diagnosis
 
-GitHub Actions run [38906829090](https://github.com/DarnoPort/Michael-OC/actions/runs/38906829090) passed at commit 81b57f0e4e6c41128d01e69ff810448ac78cf220. The pipeline compiled the normal kernel and the separate exception-test kernel, verified both Multiboot headers, booted the regular QEMU image, checked the allocator and monochrome UI self-test markers, passed the QEMU HMP keyboard-injection test, and passed the `INT3` exception-dispatch test. The exception test observed `MICHAEL_OC_EXCEPTION_VECTOR=0x00000003 ERROR=0x00000000` before the expected fatal halt. This was the passing test result before the subsequent IRQ1 change; revalidation is required for the updated interrupt-driven input path.
-
-The allocator is intentionally only a physical frame allocator at this stage. Paging, virtual address spaces and concurrency protection are not implemented. It tracks RAM below 4 GiB using a bitmap in kernel BSS and assumes the current single-core, pre-paging boot environment. The page self-test uses direct physical addressing because paging is not enabled.
+Workflow run [38911241812](https://github.com/DarnoPort/Michael-OC/actions/runs/38911241812) failed during compilation. GCC reported an invalid storage class for editor_insert_byte followed by end-of-file parse errors. Inspection found a missing closure and misplaced file-dialog input/navigation code in ui_handle_file_manager_scancode. Commit cc12793573443af3822f242644cef3184bdb18c5 restores the previously working dialog and navigation flow while preserving the MOCApp launch branch. The follow-up CI run is the required verification of this fix.
 
 ## Next tasks
 
-1. Run the new ATA/FS two-cold-boot CI test and fix any driver or metadata issue it reveals.
-2. Add a file-manager and text-editor screen on top of MOCFS1.
-3. Add paging and virtual memory with tests for mapping, unmapping and reserved-region protection.
-4. Define a userspace ABI and executable loader, then implement installable applications on top of it.
-5. Add timer and mouse drivers; only then consider a window manager.
-4. Add a block device and persistent filesystem in a QEMU disk image; test that data survives restarts.
-5. Define a stable kernel-to-app interface, executable format/loader, and application installation/removal.
-6. Implement file manager, editor, system monitor and installer as real, independently launchable applications.
-7. Add mouse support and a proper desktop/window manager after the storage and app interfaces exist.
+1. Pass the complete make test workflow after the file-manager handler fix.
+2. Expand MOCApp tests to cover arithmetic, WRITE/READ and LS (added to the current test scenario; awaiting CI).
+3. Add paging and virtual memory, including tests for mapping/unmapping and reserved-region protection.
+4. Design ring-3 execution and a stable syscall ABI before implementing native ELF loading.
+5. Improve filesystem crash consistency, possibly with journaling or copy-on-write metadata.
+6. Add timer and mouse support.
 
-## Verification rules
+## Verification policy
 
-A source file existing is not proof it runs. Distinguish boot, allocator self-test, injected input, persistence after reboot and full feature completion. Do not mark a feature smoke-tested without a relevant passing test.
-
-
-## MOCApp runtime
-
-The kernel can load and interpret on-disk `.mapp` text programs without rebuilding the kernel. Supported commands: PRINT, CLEAR, WAITKEY, IFKEY, JUMP, integer register SET/ADD/SUB/PRINTNUM, directory LS, small-file READ/WRITE, and EXIT. The fresh-disk builder seeds `welcome.mapp`; the QEMU integration test executes it, sends a key, checks its output, and then reopens a persisted text document. This runtime is ring-0 interpreted code with a 16 KiB program buffer, 256-line cap and no process isolation; it is not a native ELF/userspace loader.
+A source file or successful compile is not proof of runtime correctness. Track build, boot, keyboard input, exception dispatch, storage persistence, editor workflow, and script execution separately. Do not mark features verified until the relevant tests pass.
