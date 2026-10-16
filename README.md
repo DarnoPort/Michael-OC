@@ -5,6 +5,7 @@ Michael OC is an independent operating-system project targeting QEMU on Ubuntu L
 ## Current implementation
 
 - Bootable 32-bit x86 kernel using GRUB Multiboot v1.
+- Kernel bootstrap installs its own flat GDT before relying on fixed segment selectors in the IDT.
 - Reproducible ISO build and automated QEMU tests.
 - 800x600 packed one-bit software canvas and monochrome framebuffer renderer.
 - Keyboard-driven diagnostic UI: home, system status, keyboard test and framebuffer test.
