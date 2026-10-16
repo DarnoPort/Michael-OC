@@ -166,7 +166,7 @@ test: $(ISO) $(DISK_IMAGE)
 	done; \
 	echo "PASS: kernel boot, 1-bit canvas, UI input logic, framebuffer output, and keyboard IRQ startup."
 
-	python3 scripts/test_keyboard_input.py --qemu $(QEMU) --iso $(ISO) --work-dir $(BUILD_DIR)
+	python3 scripts/test_keyboard_input.py --qemu $(QEMU) --iso $(ISO) --disk $(DISK_IMAGE) --work-dir $(BUILD_DIR)
 	$(MAKE) test-exception
 	$(MAKE) test-storage
 
