@@ -132,6 +132,13 @@ void interrupts_init(void)
     }
 
     serial_write("MICHAEL_OC_IDT_OK\r\n");
+
+#ifdef MICHAEL_OC_EXCEPTION_TEST
+    /* This build is only used by make test-exception, never by the normal ISO. */
+    serial_write("MICHAEL_OC_EXCEPTION_TEST_TRIGGER\r\n");
+    __asm__ volatile ("int3");
+    stop_with_init_error("MICHAEL_OC_EXCEPTION_TEST_FAILED: INT3 returned");
+#endif
 }
 
 static const char *exception_name(u32 vector)
