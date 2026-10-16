@@ -734,6 +734,25 @@ static int keyboard_try_read_scancode(u8 *scancode)
     return 1;
 }
 
+static void log_ui_screen_event(void)
+{
+    switch (active_screen) {
+    case UI_SCREEN_SYSTEM:
+        serial_write("MICHAEL_OC_UI_SCREEN=SYSTEM\r\n");
+        break;
+    case UI_SCREEN_KEYBOARD:
+        serial_write("MICHAEL_OC_UI_SCREEN=KEYBOARD\r\n");
+        break;
+    case UI_SCREEN_FRAMEBUFFER:
+        serial_write("MICHAEL_OC_UI_SCREEN=FRAMEBUFFER\r\n");
+        break;
+    case UI_SCREEN_HOME:
+    default:
+        serial_write("MICHAEL_OC_UI_SCREEN=HOME\r\n");
+        break;
+    }
+}
+
 static void keyboard_poll_loop(void)
 {
     serial_write("MICHAEL_OC_KEYBOARD_POLL_OK\r\n");
@@ -741,7 +760,15 @@ static void keyboard_poll_loop(void)
     for (;;) {
         u8 scancode;
         if (keyboard_try_read_scancode(&scancode)) {
+            const enum ui_screen previous_screen = active_screen;
             if (handle_ui_scancode(scancode)) {
+                if (active_screen != previous_screen) {
+                    log_ui_screen_event();
+                } else if (active_screen == UI_SCREEN_KEYBOARD) {
+                    serial_write("MICHAEL_OC_UI_KEY_SCANCODE=");
+                    serial_write_hex((u32)scancode);
+                    serial_write("\r\n");
+                }
                 render_active_screen();
                 mono_flush_framebuffer();
             }
