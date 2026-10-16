@@ -102,3 +102,8 @@ The allocator is intentionally only a physical frame allocator at this stage. Pa
 ## Verification rules
 
 A source file existing is not proof it runs. Distinguish boot, allocator self-test, injected input, persistence after reboot and full feature completion. Do not mark a feature smoke-tested without a relevant passing test.
+
+
+## MOCApp runtime
+
+The kernel can load and interpret on-disk `.mapp` text programs without rebuilding the kernel. Supported commands: PRINT, CLEAR, WAITKEY, IFKEY, JUMP, integer register SET/ADD/SUB/PRINTNUM, directory LS, small-file READ/WRITE, and EXIT. The fresh-disk builder seeds `welcome.mapp`; the QEMU integration test executes it, sends a key, checks its output, and then reopens a persisted text document. This runtime is ring-0 interpreted code with a 16 KiB program buffer, 256-line cap and no process isolation; it is not a native ELF/userspace loader.
