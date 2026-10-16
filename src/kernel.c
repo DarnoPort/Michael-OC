@@ -1235,6 +1235,45 @@ static int ui_handle_file_manager_scancode(u8 scancode)
             return 0;
         }
         if (scancode == 0x1Cu) {
+            ui_finish_file_dialog();
+            return 1;
+        }
+        if (scancode == 0x0Eu) {
+            if (ui_file_dialog_length > 0u)
+                ui_file_dialog_buffer[--ui_file_dialog_length] = '\0';
+            return 1;
+        }
+        const char ch = ui_scancode_to_ascii(scancode);
+        if (ch != '\0' && ui_file_dialog_length < FS_NAME_MAX) {
+            ui_file_dialog_buffer[ui_file_dialog_length++] = ch;
+            ui_file_dialog_buffer[ui_file_dialog_length] = '\0';
+            return 1;
+        }
+        return 0;
+    }
+
+    if (scancode == 0x48u) {
+        if (ui_file_count != 0u && ui_file_selection > 0u) --ui_file_selection;
+        return 1;
+    }
+    if (scancode == 0x50u) {
+        if (ui_file_count != 0u && ui_file_selection + 1u < ui_file_count) ++ui_file_selection;
+        return 1;
+    }
+    if (scancode == 0x0Eu) {
+        if (ui_directory_depth > 0u) {
+            --ui_directory_depth;
+            ui_file_selection = 0u;
+            ui_set_message("PARENT DIRECTORY");
+        } else ui_set_message("ALREADY AT ROOT");
+        return 1;
+    }
+    if (scancode == 0x3Cu) {
+        ui_set_message("DIRECTORY REFRESHED");
+        ui_refresh_file_list();
+        return 1;
+    }
+    if (scancode == 0x1Cu) {
         if (ui_file_selection >= ui_file_count) return 0;
         u16 index = 0u;
         const fs_entry_t *entry = &ui_file_entries[ui_file_selection];

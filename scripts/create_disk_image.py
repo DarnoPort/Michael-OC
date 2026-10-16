@@ -22,10 +22,16 @@ def create_image(path: Path) -> None:
     app_source = (
         b"PRINT MICHAEL OC SCRIPT APP\n"
         b"PRINT LOADED FROM DISK\n"
+        b"SET 40\n"
+        b"ADD 2\n"
+        b"PRINTNUM\n"
+        b"WRITE mocapp.txt DATA FROM SCRIPT\n"
+        b"READ mocapp.txt\n"
+        b"LS\n"
         b"WAITKEY\n"
-        b"IFKEY a 6\n"
+        b"IFKEY a 12\n"
         b"PRINT WRONG KEY\n"
-        b"JUMP 7\n"
+        b"JUMP 12\n"
         b"PRINT KEY RECEIVED\n"
         b"EXIT\n"
     )
