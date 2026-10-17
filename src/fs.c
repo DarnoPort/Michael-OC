@@ -34,6 +34,8 @@ _Static_assert(sizeof(fs_entry_t) == 64u, "bad directory entry size");
 _Static_assert(sizeof(fs_entry_t) * FS_DIRECTORY_LIMIT ==
                FS_DIRECTORY_SECTORS * FS_SECTOR_SIZE, "bad directory geometry");
 static u8 bitmap[FS_BITMAP_BYTES];
+/* Scratch map used during mount to prove that every data sector has one owner. */
+static u8 validation_bitmap[FS_BITMAP_BYTES];
 static fs_entry_t directory[FS_DIRECTORY_LIMIT];
 static u8 io_buffer[FS_SECTOR_SIZE] __attribute__((aligned(2)));
 static u32 mounted_total_sectors;
@@ -147,12 +149,17 @@ static int validate_parent_chain(u16 index)
 }
 static int validate_directory(void)
 {
+    for (u32 i = 0u; i < FS_BITMAP_BYTES; ++i) {
+        validation_bitmap[i] = 0u;
+    }
+
     for (u32 i = 0u; i < FS_DIRECTORY_LIMIT; ++i) {
         const fs_entry_t *entry = &directory[i];
         if (entry->type == 0u) continue;
         if (entry->type != FS_ENTRY_FILE && entry->type != FS_ENTRY_DIRECTORY) return 0;
         if (!valid_stored_name(entry->name) || !valid_parent(entry->parent_index) ||
             !validate_parent_chain((u16)i)) return 0;
+
         if (entry->type == FS_ENTRY_DIRECTORY) {
             if (entry->sector_count != 0u || entry->size_bytes != 0u ||
                 entry->start_sector != 0u) return 0;
@@ -167,15 +174,48 @@ static int validate_directory(void)
                 if (entry->start_sector < FS_DATA_START ||
                     entry->start_sector >= mounted_total_sectors ||
                     required > mounted_total_sectors - entry->start_sector) return 0;
-                for (u32 j = 0u; j < required; ++j)
-                    if (!bitmap_get(entry->start_sector + j)) return 0;
+
+                for (u32 j = 0u; j < required; ++j) {
+                    const u32 sector = entry->start_sector + j;
+                    const u8 mask = (u8)(1u << (sector & 7u));
+                    u8 *owner_byte = &validation_bitmap[sector >> 3u];
+
+                    /*
+                     * Every referenced sector must be allocated and have
+                     * exactly one file owner. This rejects aliased extents,
+                     * which could otherwise make two files overwrite each
+                     * other's contents while still passing a simple bitmap test.
+                     */
+                    if (!bitmap_get(sector) || (*owner_byte & mask) != 0u) return 0;
+                    *owner_byte |= mask;
+                }
             }
         }
-        for (u32 j = i + 1u; j < FS_DIRECTORY_LIMIT; ++j)
+
+        for (u32 j = i + 1u; j < FS_DIRECTORY_LIMIT; ++j) {
             if (directory[j].type != 0u &&
                 directory[j].parent_index == entry->parent_index &&
                 text_equal(directory[j].name, entry->name)) return 0;
+        }
     }
+
+    /*
+     * Reconcile the allocation bitmap against the extents reachable from the
+     * directory. An allocated but unreferenced sector is stale/orphaned
+     * metadata; reject the volume instead of silently leaking disk capacity.
+     */
+    for (u32 sector = FS_DATA_START; sector < mounted_total_sectors; ++sector) {
+        const u8 mask = (u8)(1u << (sector & 7u));
+        const int has_owner =
+            (validation_bitmap[sector >> 3u] & mask) != 0u;
+        if (bitmap_get(sector) != has_owner) return 0;
+    }
+
+    /* Bits outside the advertised disk size must never claim real storage. */
+    for (u32 sector = mounted_total_sectors; sector < FS_MAX_SECTORS; ++sector) {
+        if (bitmap_get(sector)) return 0;
+    }
+
     return 1;
 }
 int fs_mount(void)
