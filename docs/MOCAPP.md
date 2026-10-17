@@ -49,7 +49,7 @@ Branch targets use zero-based source lines. Blank and comment lines count as sou
 
 ## Storage behavior
 
-LS, READ, and WRITE act in the file manager's current directory. Files are stored on the persistent QEMU disk. WRITE replaces the contents of an existing file. MOCFS1 currently uses a fixed-size directory table and contiguous extents without a journal, so sudden shutdowns during metadata changes can leave the filesystem inconsistent.
+LS, READ, and WRITE act in the file manager's current directory. Files are stored on the persistent QEMU disk. WRITE replaces the contents of an existing file. MOCFS1 v2 uses a checksummed write-ahead journal for complete directory-table and bitmap updates and replays a committed metadata update during mount. Format v1 images remain supported without journaling. The filesystem still uses a fixed-size directory table and contiguous extents; in-place file-data writes and operations spanning several independent metadata transactions are not fully atomic.
 
 The fresh-disk image created by scripts/create_disk_image.py contains welcome.mapp as an integration-test example. Deleting the disk image and creating a new one resets persistent data.
 

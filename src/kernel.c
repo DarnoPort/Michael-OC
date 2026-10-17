@@ -2289,6 +2289,16 @@ static void storage_self_test(void)
     if (!fs_mount()) storage_test_fail("MOUNT");
     serial_write("MICHAEL_OC_STORAGE_FS_OK\r\n");
     if (fs_mount_repaired_bitmap()) serial_write("MICHAEL_OC_FS_BITMAP_REPAIRED\r\n");
+    if (fs_mount_recovered_journal()) {
+        u16 recovery_index = 0u;
+        u32 recovery_size = 0u;
+        if (!fs_lookup(FS_ROOT, "journal-recovered.txt", &recovery_index) ||
+            !fs_read_file(recovery_index, 0, 0u, &recovery_size) ||
+            recovery_size != 0u)
+            storage_test_fail("JOURNAL_RECOVERY_CONTENT");
+        serial_write("MICHAEL_OC_STORAGE_JOURNAL_REPLAY_OK\r\n");
+        halt_forever();
+    }
 
     const u32 payload_size = (u32)sizeof(persistent_payload);
     if (!fs_lookup(FS_ROOT, "ci-persist.txt", &file_index)) {

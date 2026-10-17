@@ -9,13 +9,13 @@ Michael OC is an independent operating-system project targeting QEMU on Ubuntu L
 - Reproducible ISO build and automated QEMU integration tests.
 - 800×600 packed one-bit canvas and monochrome framebuffer output.
 - Keyboard-operated system status, keyboard diagnostics, framebuffer test, file manager, and text editor.
-- ATA PIO sector I/O to a QEMU IDE disk, plus MOCFS1 persistent storage with nested directories and file/directory create, list, rename, read, write, and delete operations.
+- ATA PIO sector I/O to a QEMU IDE disk, plus MOCFS1 v2 persistent storage with nested directories, file/directory create, list, rename, move, copy, read, write, and delete operations. Metadata updates use a replayable write-ahead journal; legacy v1 images remain readable and writable.
 - File editor with cursor navigation, insertion/deletion, F2 save, and QEMU integration coverage across restarts.
 - MOCApp: a disk-loaded text-script runtime supporting output, key input, branches, an integer register, and basic file-system operations.
 - Fresh virtual-disk image seeded with a runnable welcome.mapp demonstration.
 - Integration test targets for boot markers, keyboard input, exception dispatch, file-system persistence, and UI-driven script execution.
 
-**Michael OC is still an early-stage OS, not a completed general-purpose operating system.** The UI and MOCApp interpreter run in kernel context; applications do not have isolated address spaces or protected user mode. The current 4 KiB paging setup is a single supervisor-only identity map with protected kernel text, not per-process virtual memory. A stable syscall ABI, native ELF loader, and process scheduler are not implemented. PIT timer and PS/2 mouse support are basic; MOCFS1 still lacks journaling and crash recovery.
+**Michael OC is still an early-stage OS, not a completed general-purpose operating system.** The UI and MOCApp interpreter run in kernel context; applications do not have isolated address spaces or protected user mode. The current 4 KiB paging setup is a single supervisor-only identity map with protected kernel text, not per-process virtual memory. A stable syscall ABI, native ELF loader, and process scheduler are not implemented. PIT timer and PS/2 mouse support are basic. MOCFS1 v2 journals directory and bitmap metadata, but data-sector writes and operations spanning multiple independent metadata transactions are not fully atomic; v1 images remain unjournaled.
 
 ## Build requirements (Ubuntu)
 
@@ -53,11 +53,11 @@ The `make test` suite builds and boots the ISO in QEMU, checks keyboard and mous
 
 - No per-process address spaces, ring-3 user mode, stable syscall ABI, native ELF loader, or process scheduler. Paging currently uses one global identity map, with kernel text protected from writes.
 - The interpreter operates in kernel context and supports only its documented instructions; it is not a security boundary.
-- MOCFS1 is a custom, fixed-table filesystem with contiguous file extents. Mount rebuilds the allocation bitmap from validated extents, repairs orphan/missing allocation bits, and rejects overlapping extents. It has no journal; torn multi-sector directory updates or interrupted in-place data writes can still require recovery.
+- MOCFS1 is a custom, fixed-table filesystem with contiguous file extents. Format v2 reserves sectors 17–33 for a checksummed write-ahead journal plus directory/bitmap shadow copies, and replays a committed metadata transaction on mount before loading the tables. Legacy v1 images keep their original data start at sector 17 and remain supported, but have no journal. The v2 journal protects each complete directory-table or bitmap update; it does not make a sequence of separate metadata updates or in-place file-data writes one atomic transaction.
 - PIT timer and PS/2 mouse support are rudimentary and do not provide preemptive scheduling.
 - The UI tools are kernel-resident screens rather than separate protected processes.
 
-Next priorities are stronger filesystem consistency and crash recovery, ring-3 execution with a stable syscall ABI, per-process memory spaces, and a process scheduler. Only label a feature as verified when its corresponding test actually passes.
+Next priorities are crash consistency for file contents and operations that span multiple metadata transactions, scalable directory/allocation structures, ring-3 execution with a stable syscall ABI, per-process memory spaces, and a process scheduler. Only label a feature as verified when its corresponding test actually passes.
 
 ## Installing an app created outside QEMU
 
@@ -66,7 +66,7 @@ Shut down QEMU before changing its disk image. Then use the host-side installer 
     python3 scripts/install_mocapp.py --disk build/michael-oc-disk.img --source ./hello.mapp
     make run
 
-The installer validates MOCFS1 metadata and script limits, rejects duplicate root names instead of overwriting files, and atomically replaces the image file after writing the script, bitmap, and directory entry. It changes the virtual disk only; the kernel and bootable ISO are not rebuilt. The tool supports this project's MOCFS1 disk-image format, not arbitrary FAT/NTFS disks.
+The installer validates MOCFS1 v1/v2 metadata and script limits, rejects duplicate root names instead of overwriting files, replays a valid pending v2 metadata journal in its temporary image, and atomically replaces the image after adding the script. It changes the virtual disk only; the kernel and bootable ISO are not rebuilt. The tool supports this project's MOCFS1 format, not arbitrary FAT/NTFS disks.
 
 ## Paging milestone
 

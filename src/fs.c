@@ -1,19 +1,26 @@
 /*
- * Michael OC File System v1: fixed directory table, bitmap, contiguous extents
- * and parent-index directories. It is not journaled; mount validates media
- * instead of silently formatting an unknown disk.
+ * MOCFS1 format v2 adds a write-ahead journal for the bitmap and directory
+ * arrays. Format v1 remains readable/writable without journaling.
  */
 #include "fs.h"
 #include "disk.h"
 #define FS_SECTOR_SIZE 512u
 #define FS_MAX_SECTORS 32768u
 #define FS_BITMAP_BYTES (FS_MAX_SECTORS / 8u)
-#define FS_VERSION 1u
+#define FS_VERSION_V1 1u
+#define FS_VERSION 2u
 #define FS_BITMAP_START 1u
 #define FS_BITMAP_SECTORS 8u
 #define FS_DIRECTORY_START 9u
 #define FS_DIRECTORY_SECTORS 8u
-#define FS_DATA_START 17u
+#define FS_V1_DATA_START 17u
+#define FS_DATA_START 34u
+#define FS_JOURNAL_HEADER_SECTOR 17u
+#define FS_DIRECTORY_JOURNAL_START 18u
+#define FS_BITMAP_JOURNAL_START 26u
+#define FS_JOURNAL_MAGIC 0x314A4F4Du
+#define FS_JOURNAL_DIRECTORY 1u
+#define FS_JOURNAL_BITMAP 2u
 
 typedef struct __attribute__((packed)) {
     u8 magic[8];
@@ -29,7 +36,17 @@ typedef struct __attribute__((packed)) {
     u8 reserved[468];
 } fs_superblock_t;
 
+typedef struct __attribute__((packed)) {
+    u32 magic;
+    u32 kind;
+    u32 sector_count;
+    u32 checksum;
+    u32 target_start;
+    u8 reserved[492];
+} fs_journal_header_t;
+
 _Static_assert(sizeof(fs_superblock_t) == FS_SECTOR_SIZE, "bad superblock size");
+_Static_assert(sizeof(fs_journal_header_t) == FS_SECTOR_SIZE, "bad journal header size");
 _Static_assert(sizeof(fs_entry_t) == 64u, "bad directory entry size");
 _Static_assert(sizeof(fs_entry_t) * FS_DIRECTORY_LIMIT ==
                FS_DIRECTORY_SECTORS * FS_SECTOR_SIZE, "bad directory geometry");
@@ -39,8 +56,11 @@ static u8 validation_bitmap[FS_BITMAP_BYTES];
 static fs_entry_t directory[FS_DIRECTORY_LIMIT];
 static u8 io_buffer[FS_SECTOR_SIZE] __attribute__((aligned(2)));
 static u32 mounted_total_sectors;
+static u32 mounted_data_start;
 static int mounted;
+static int journal_enabled;
 static int mount_bitmap_repaired;
+static int mount_journal_recovered;
 
 static u32 text_length(const char *text)
 {
@@ -86,18 +106,112 @@ static void bitmap_set(u32 sector)
 { bitmap[sector >> 3u] |= (u8)(1u << (sector & 7u)); }
 static void bitmap_clear(u32 sector)
 { bitmap[sector >> 3u] &= (u8)~(u8)(1u << (sector & 7u)); }
-static int persist_bitmap(void)
+static u32 checksum_bytes(const u8 *bytes, u32 length)
 {
-    for (u32 i = 0u; i < FS_BITMAP_SECTORS; ++i)
-        if (!ata_write_sector(FS_BITMAP_START + i, &bitmap[i * FS_SECTOR_SIZE])) return 0;
+    u32 checksum = 2166136261u;
+    for (u32 i = 0u; i < length; ++i)
+        checksum = (checksum ^ bytes[i]) * 16777619u;
+    return checksum;
+}
+
+static u32 journal_shadow_start(u32 kind)
+{
+    return kind == FS_JOURNAL_DIRECTORY ?
+        FS_DIRECTORY_JOURNAL_START : FS_BITMAP_JOURNAL_START;
+}
+
+static u32 journal_target_start(u32 kind)
+{
+    return kind == FS_JOURNAL_DIRECTORY ? FS_DIRECTORY_START : FS_BITMAP_START;
+}
+
+/*
+ * Replay is idempotent: the commit header is cleared only after its complete
+ * payload checksum has been verified and every home sector has been written.
+ */
+static int recover_journal(int mark_mount_recovery)
+{
+    if (!journal_enabled) return 1;
+    if (!ata_read_sector(FS_JOURNAL_HEADER_SECTOR, io_buffer)) return 0;
+
+    fs_journal_header_t pending;
+    for (u32 i = 0u; i < sizeof(pending); ++i)
+        ((u8 *)&pending)[i] = io_buffer[i];
+
+    if (pending.magic == 0u) return 1;
+    if (pending.magic != FS_JOURNAL_MAGIC ||
+        pending.sector_count != FS_DIRECTORY_SECTORS) return 0;
+    if (pending.kind != FS_JOURNAL_DIRECTORY &&
+        pending.kind != FS_JOURNAL_BITMAP) return 0;
+    if (pending.target_start != journal_target_start(pending.kind)) return 0;
+
+    const u32 shadow_start = journal_shadow_start(pending.kind);
+    u32 checksum = 2166136261u;
+    for (u32 sector = 0u; sector < pending.sector_count; ++sector) {
+        if (!ata_read_sector(shadow_start + sector, io_buffer)) return 0;
+        for (u32 byte = 0u; byte < FS_SECTOR_SIZE; ++byte)
+            checksum = (checksum ^ io_buffer[byte]) * 16777619u;
+    }
+    if (checksum != pending.checksum) return 0;
+
+    for (u32 sector = 0u; sector < pending.sector_count; ++sector) {
+        if (!ata_read_sector(shadow_start + sector, io_buffer) ||
+            !ata_write_sector(pending.target_start + sector, io_buffer)) return 0;
+    }
+
+    for (u32 byte = 0u; byte < FS_SECTOR_SIZE; ++byte) io_buffer[byte] = 0u;
+    if (!ata_write_sector(FS_JOURNAL_HEADER_SECTOR, io_buffer)) return 0;
+    if (mark_mount_recovery) mount_journal_recovered = 1;
     return 1;
 }
+
+static int persist_metadata(u32 kind, const u8 *bytes)
+{
+    const u32 target_start = journal_target_start(kind);
+    if (!journal_enabled) {
+        for (u32 sector = 0u; sector < FS_DIRECTORY_SECTORS; ++sector)
+            if (!ata_write_sector(target_start + sector,
+                                  &bytes[sector * FS_SECTOR_SIZE])) return 0;
+        return 1;
+    }
+
+    /* Finish an earlier committed write before reusing its journal slots. */
+    if (!recover_journal(0)) return 0;
+
+    const u32 shadow_start = journal_shadow_start(kind);
+    for (u32 sector = 0u; sector < FS_DIRECTORY_SECTORS; ++sector)
+        if (!ata_write_sector(shadow_start + sector,
+                              &bytes[sector * FS_SECTOR_SIZE])) return 0;
+
+    fs_journal_header_t header;
+    for (u32 byte = 0u; byte < sizeof(header); ++byte)
+        ((u8 *)&header)[byte] = 0u;
+    header.magic = FS_JOURNAL_MAGIC;
+    header.kind = kind;
+    header.sector_count = FS_DIRECTORY_SECTORS;
+    header.checksum = checksum_bytes(bytes, FS_DIRECTORY_SECTORS * FS_SECTOR_SIZE);
+    header.target_start = target_start;
+
+    /* This single-sector header is the transaction's durable commit point. */
+    if (!ata_write_sector(FS_JOURNAL_HEADER_SECTOR, &header)) return 0;
+
+    /*
+     * Once the commit marker is on disk, return success even if replay needs
+     * another boot; otherwise callers might roll back RAM while disk has a
+     * committed transaction waiting for replay.
+     */
+    (void)recover_journal(0);
+    return 1;
+}
+
+static int persist_bitmap(void)
+{
+    return persist_metadata(FS_JOURNAL_BITMAP, bitmap);
+}
+
 static int persist_directory(void)
 {
-    const u8 *bytes = (const u8 *)directory;
-    for (u32 i = 0u; i < FS_DIRECTORY_SECTORS; ++i)
-        if (!ata_write_sector(FS_DIRECTORY_START + i, &bytes[i * FS_SECTOR_SIZE])) return 0;
-    return 1;
+    return persist_metadata(FS_JOURNAL_DIRECTORY, (const u8 *)directory);
 }
 static int valid_parent(u16 parent)
 {
@@ -120,9 +234,9 @@ static int name_exists(u16 parent, const char *name)
 static int allocate_contiguous(u32 needed, u32 *start_out)
 {
     if (needed == 0u) { *start_out = 0u; return 1; }
-    if (needed > mounted_total_sectors - FS_DATA_START) return 0;
-    u32 run = 0u, run_start = FS_DATA_START;
-    for (u32 sector = FS_DATA_START; sector < mounted_total_sectors; ++sector) {
+    if (needed > mounted_total_sectors - mounted_data_start) return 0;
+    u32 run = 0u, run_start = mounted_data_start;
+    for (u32 sector = mounted_data_start; sector < mounted_total_sectors; ++sector) {
         if (!bitmap_get(sector)) {
             if (run == 0u) run_start = sector;
             if (++run >= needed) { *start_out = run_start; return 1; }
@@ -159,7 +273,7 @@ static int validate_directory(void)
      * prefix. Reconstruct these bits rather than trusting a potentially stale
      * bitmap left by an interrupted allocation or deletion.
      */
-    for (u32 sector = 0u; sector < FS_DATA_START; ++sector) {
+    for (u32 sector = 0u; sector < mounted_data_start; ++sector) {
         validation_bitmap[sector >> 3u] |= (u8)(1u << (sector & 7u));
     }
 
@@ -174,14 +288,14 @@ static int validate_directory(void)
             if (entry->sector_count != 0u || entry->size_bytes != 0u ||
                 entry->start_sector != 0u) return 0;
         } else {
-            if (entry->size_bytes > (mounted_total_sectors - FS_DATA_START) * FS_SECTOR_SIZE)
+            if (entry->size_bytes > (mounted_total_sectors - mounted_data_start) * FS_SECTOR_SIZE)
                 return 0;
             const u32 required = (entry->size_bytes + FS_SECTOR_SIZE - 1u) / FS_SECTOR_SIZE;
             if (required != entry->sector_count) return 0;
             if (required == 0u) {
                 if (entry->start_sector != 0u) return 0;
             } else {
-                if (entry->start_sector < FS_DATA_START ||
+                if (entry->start_sector < mounted_data_start ||
                     entry->start_sector >= mounted_total_sectors ||
                     required > mounted_total_sectors - entry->start_sector) return 0;
 
@@ -210,10 +324,11 @@ static int validate_directory(void)
     }
 
     /*
-     * The expected map is now derived from reserved structures and validated
+     * The expected map is derived from reserved structures and validated
      * file extents. Repair stale/orphan bits, missing allocation bits, and
-     * out-of-range bits. This recovers common interrupted bitmap updates.
-     * It is not a journal and cannot repair arbitrary torn directory records.
+     * out-of-range bits. In v2, committed directory/bitmap transactions are
+     * replayed before this check; this repair remains useful for interrupted
+     * multi-step operations and legacy v1 images.
      */
     int bitmap_differs = 0;
     for (u32 i = 0u; i < FS_BITMAP_BYTES; ++i) {
@@ -236,45 +351,70 @@ static int validate_directory(void)
 int fs_mount(void)
 {
     mounted = 0;
-    mount_bitmap_repaired = 0;
+    journal_enabled = 0;
     mounted_total_sectors = 0u;
-    if (!ata_init() || ata_sector_count() < FS_DATA_START + 1u ||
+    mounted_data_start = 0u;
+    mount_bitmap_repaired = 0;
+    mount_journal_recovered = 0;
+
+    if (!ata_init() || ata_sector_count() < FS_V1_DATA_START + 1u ||
         ata_sector_count() > FS_MAX_SECTORS) return 0;
     if (!ata_read_sector(0u, io_buffer)) return 0;
     const fs_superblock_t *super = (const fs_superblock_t *)io_buffer;
+    const u32 version = super->version;
+    const u32 data_start = super->data_start;
+    const u32 total_sectors = super->total_sectors;
+    const u32 expected_data_start = version == FS_VERSION_V1 ?
+        FS_V1_DATA_START : FS_DATA_START;
+
     if (super->magic[0] != 'M' || super->magic[1] != 'O' ||
         super->magic[2] != 'C' || super->magic[3] != 'F' ||
         super->magic[4] != 'S' || super->magic[5] != '1' ||
-        super->version != FS_VERSION || super->total_sectors != ata_sector_count() ||
+        (version != FS_VERSION_V1 && version != FS_VERSION) ||
+        total_sectors != ata_sector_count() ||
         super->bitmap_start != FS_BITMAP_START || super->bitmap_sectors != FS_BITMAP_SECTORS ||
         super->directory_start != FS_DIRECTORY_START ||
         super->directory_sectors != FS_DIRECTORY_SECTORS ||
-        super->data_start != FS_DATA_START || super->entry_count != FS_DIRECTORY_LIMIT ||
-        super->entry_size != sizeof(fs_entry_t) || super->total_sectors > FS_MAX_SECTORS)
+        data_start != expected_data_start || total_sectors <= data_start ||
+        super->entry_count != FS_DIRECTORY_LIMIT ||
+        super->entry_size != sizeof(fs_entry_t) || total_sectors > FS_MAX_SECTORS)
         return 0;
-    mounted_total_sectors = super->total_sectors;
+
+    mounted_total_sectors = total_sectors;
+    mounted_data_start = data_start;
+    journal_enabled = version == FS_VERSION;
+    if (journal_enabled && !recover_journal(1)) {
+        mounted_total_sectors = 0u;
+        mounted_data_start = 0u;
+        journal_enabled = 0;
+        return 0;
+    }
+
     for (u32 i = 0u; i < FS_BITMAP_SECTORS; ++i) {
         if (!ata_read_sector(FS_BITMAP_START + i, &bitmap[i * FS_SECTOR_SIZE])) {
-            mounted_total_sectors = 0u; return 0;
+            mounted_total_sectors = 0u; mounted_data_start = 0u; return 0;
         }
     }
     u8 *directory_bytes = (u8 *)directory;
     for (u32 i = 0u; i < FS_DIRECTORY_SECTORS; ++i) {
         if (!ata_read_sector(FS_DIRECTORY_START + i, &directory_bytes[i * FS_SECTOR_SIZE])) {
-            mounted_total_sectors = 0u; return 0;
+            mounted_total_sectors = 0u; mounted_data_start = 0u; return 0;
         }
     }
-    if (!validate_directory()) { mounted_total_sectors = 0u; return 0; }
+    if (!validate_directory()) {
+        mounted_total_sectors = 0u; mounted_data_start = 0u; return 0;
+    }
     mounted = 1;
     return 1;
 }
 int fs_is_mounted(void) { return mounted; }
 int fs_mount_repaired_bitmap(void) { return mounted && mount_bitmap_repaired; }
+int fs_mount_recovered_journal(void) { return mounted && mount_journal_recovered; }
 u32 fs_free_sectors(void)
 {
     if (!mounted) return 0u;
     u32 count = 0u;
-    for (u32 sector = FS_DATA_START; sector < mounted_total_sectors; ++sector)
+    for (u32 sector = mounted_data_start; sector < mounted_total_sectors; ++sector)
         if (!bitmap_get(sector)) ++count;
     return count;
 }
@@ -343,7 +483,7 @@ int fs_write_file(u16 index, const u8 *buffer, u32 size)
 {
     if (!mounted || index >= FS_DIRECTORY_LIMIT || directory[index].type != FS_ENTRY_FILE ||
         (size != 0u && buffer == 0) ||
-        size > (mounted_total_sectors - FS_DATA_START) * FS_SECTOR_SIZE) return 0;
+        size > (mounted_total_sectors - mounted_data_start) * FS_SECTOR_SIZE) return 0;
     const u32 needed = (size + FS_SECTOR_SIZE - 1u) / FS_SECTOR_SIZE;
     const u32 old_start = directory[index].start_sector;
     const u32 old_count = directory[index].sector_count;

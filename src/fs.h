@@ -19,6 +19,8 @@ typedef struct __attribute__((packed)) {
 int fs_mount(void);
 int fs_is_mounted(void);
 int fs_mount_repaired_bitmap(void);
+/* True only when this mount replayed a committed metadata transaction. */
+int fs_mount_recovered_journal(void);
 u32 fs_free_sectors(void);
 int fs_lookup(u16 parent, const char *name, u16 *index_out);
 int fs_list(u16 parent, fs_entry_t *entries_out, u32 capacity, u32 *count_out);
