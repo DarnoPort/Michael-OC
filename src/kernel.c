@@ -2081,6 +2081,7 @@ static void storage_self_test(void)
 
     if (!fs_mount()) storage_test_fail("MOUNT");
     serial_write("MICHAEL_OC_STORAGE_FS_OK\r\n");
+    if (fs_mount_repaired_bitmap()) serial_write("MICHAEL_OC_FS_BITMAP_REPAIRED\r\n");
 
     const u32 payload_size = (u32)sizeof(persistent_payload);
     if (!fs_lookup(FS_ROOT, "ci-persist.txt", &file_index)) {
@@ -2179,6 +2180,7 @@ void kernel_main(u32 multiboot_magic, u32 multiboot_info)
 #endif
     if (fs_mount()) {
         serial_write("MICHAEL_OC_FS_OK\r\n");
+        if (fs_mount_repaired_bitmap()) serial_write("MICHAEL_OC_FS_BITMAP_REPAIRED\r\n");
     } else {
         serial_write("MICHAEL_OC_FS_UNAVAILABLE\r\n");
     }
