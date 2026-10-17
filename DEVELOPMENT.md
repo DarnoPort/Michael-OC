@@ -24,7 +24,7 @@
 | PS/2 keyboard IRQ1 | Verified | Latest QEMU keyboard test exercises key delivery, navigation, and the debug console |
 | Physical page allocator | Verified | RAM-map parsing and allocation/free self-test; paging now also enabled |
 | ATA PIO disk driver | Verified | QEMU persistence and filesystem integration tests use the primary-master IDE device |
-| MOCFS1 persistent filesystem | Implemented, pending verification | This change adds ownership-map validation and malformed-volume regression tests for overlapping extents and orphan bitmap allocations; journaling remains unimplemented |
+| MOCFS1 persistent filesystem | Verified by QEMU CI | Run [38988825037](https://github.com/DarnoPort/Michael-OC/actions/runs/38988825037) passed two-cold-boot persistence/CRUD plus rejection of overlapping extents and orphan bitmap allocations; journaling remains unimplemented |
 | File manager and text editor | Verified | Latest CI passed file-manager/editor writes and reopened persisted content after reboot |
 | MOCApp on-disk interpreter | Verified by integration test | Latest CI exercised PRINT, WAITKEY, IFKEY/JUMP, SET/ADD/PRINTNUM and filesystem LS/READ/WRITE |
 | MOCApp file-manager workflow | Verified by integration test | Disk-resident script launch and exit path passed QEMU app test; host installer has separate checks |
@@ -68,11 +68,11 @@ The ISO is build/michael-oc.iso. Persistent user files are stored in build/micha
 
 ## Latest CI status
 
-The latest complete workflow, [38915742572](https://github.com/DarnoPort/Michael-OC/actions/runs/38915742572), passed all steps, including ISO build, Multiboot header, QEMU boot, console navigation, mouse click navigation, exception dispatch, enforced kernel text protection, file persistence/CRUD, editor/MOCApp execution, and the host-side installer. Earlier failures on intermediate commits were fixed; do not treat those old run results as the current status.
+The latest successful pull-request workflow, [38988825037](https://github.com/DarnoPort/Michael-OC/actions/runs/38988825037), passed the full build-and-boot job. In addition to the existing keyboard/mouse, CPU-exception, page-protection, disk-persistence, editor/MOCApp and installer tests, it verified mount rejection for overlapping file extents and allocated sectors with no directory owner. The post-merge `main` workflow is running separately; its result must be checked before describing that exact commit as CI-verified.
 
 ## Next tasks
 
-1. Verify the mount-time ownership-map checks against the new overlapping-extent and orphan-allocation QEMU regression cases.
+1. Wait for the post-merge main workflow to confirm the already-passing ownership-map checks on the merged commit.
 2. Improve crash consistency for metadata and data updates, using a recoverable commit protocol or journaling.
 3. Revisit fixed directory capacity and contiguous extents; fragmentation can exhaust contiguous free space before total free space is exhausted.
 4. Add a ring-3 execution path with a TSS, explicit syscall ABI, and a strict user/kernel boundary.
