@@ -147,8 +147,26 @@ def create_pending_journal_disk(create_script: Path, disk: Path, kind: str) -> N
         if free_sector is None:
             raise RuntimeError("transaction fixture has no free data sector")
 
+        # The kernel's generic replay self-test expects its zero-byte marker;
+        # keep that entry alongside the file that proves bitmap replay.
+        transaction_slot = None
+        for index in range(entry_count):
+            entry = struct.unpack_from(
+                "<32sHBBIIH18s", directory_payload, index * entry_size
+            )
+            if index != free_slot and entry[2] == 0:
+                transaction_slot = index
+                break
+        if transaction_slot is None:
+            raise RuntimeError("transaction fixture has no second free directory entry")
+
         struct.pack_into(
             "<32sHBBIIH18s", directory_payload, free_slot * entry_size,
+            b"journal-recovered.txt".ljust(32, b"\x00"),
+            0xFFFF, 1, 0, 0, 0, 0, bytes(18),
+        )
+        struct.pack_into(
+            "<32sHBBIIH18s", directory_payload, transaction_slot * entry_size,
             b"atomic-recovered.txt".ljust(32, b"\x00"),
             0xFFFF, 1, 0, free_sector, 1, 1, bytes(18),
         )
