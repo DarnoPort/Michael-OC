@@ -81,6 +81,7 @@ static u32 ui_directory_depth;
 static fs_entry_t ui_file_entries[FS_DIRECTORY_LIMIT];
 static u32 ui_file_count;
 static u32 ui_file_selection;
+static u32 ui_file_first_entry;
 static enum ui_file_dialog_mode ui_file_dialog;
 static char ui_file_dialog_buffer[32];
 static u32 ui_file_dialog_length;
@@ -595,21 +596,51 @@ static u16 ui_current_directory(void)
     return ui_directory_depth == 0u ? FS_ROOT : ui_directory_stack[ui_directory_depth - 1u];
 }
 
+static void ui_keep_file_selection_visible(void)
+{
+    const u32 previous_first = ui_file_first_entry;
+    if (ui_file_count == 0u) {
+        ui_file_first_entry = 0u;
+    } else {
+        if (ui_file_selection >= ui_file_count)
+            ui_file_selection = ui_file_count - 1u;
+
+        if (ui_file_selection < ui_file_first_entry) {
+            ui_file_first_entry = ui_file_selection;
+        } else if (ui_file_selection >= ui_file_first_entry + UI_FILE_VISIBLE_ENTRIES) {
+            ui_file_first_entry = ui_file_selection - UI_FILE_VISIBLE_ENTRIES + 1u;
+        }
+
+        const u32 max_first = ui_file_count > UI_FILE_VISIBLE_ENTRIES ?
+            ui_file_count - UI_FILE_VISIBLE_ENTRIES : 0u;
+        if (ui_file_first_entry > max_first) ui_file_first_entry = max_first;
+    }
+
+    if (ui_file_first_entry != previous_first) {
+        serial_write("MICHAEL_OC_FILE_WINDOW_FIRST=");
+        serial_write_hex(ui_file_first_entry);
+        serial_write("\r\n");
+    }
+}
+
 static void ui_refresh_file_list(void)
 {
     ui_file_count = 0u;
     if (!fs_is_mounted()) {
         ui_set_message("NO DISK AVAILABLE");
+        ui_keep_file_selection_visible();
         return;
     }
     u32 count = 0u;
     if (!fs_list(ui_current_directory(), ui_file_entries, FS_DIRECTORY_LIMIT, &count)) {
         ui_set_message("DIRECTORY READ FAILED");
+        ui_keep_file_selection_visible();
         return;
     }
     ui_file_count = count;
     if (ui_file_count == 0u) ui_file_selection = 0u;
     else if (ui_file_selection >= ui_file_count) ui_file_selection = ui_file_count - 1u;
+    ui_keep_file_selection_visible();
 }
 
 static void ui_select_name(const char *name)
@@ -989,19 +1020,41 @@ static void draw_file_manager(void)
     mono_draw_text(80u, 118u, ui_directory_depth == 0u ? "ROOT" : "SUBDIRECTORY", 1u, 0);
     mono_draw_text(250u, 118u, "N NEW D DIR R RENAME X DELETE", 1u, 0);
     mono_draw_text(80u, 132u, "ENTER OPEN BACKSPACE PARENT", 1u, 0);
+    mono_draw_text(580u, 132u, "ITEM", 1u, 0);
+    mono_draw_uint(610u, 132u, ui_file_count == 0u ? 0u : ui_file_selection + 1u, 1u);
+    mono_draw_text(634u, 132u, "/", 1u, 0);
+    mono_draw_uint(642u, 132u, ui_file_count, 1u);
     if (ui_file_count == 0u) mono_draw_text(100u, 165u, "DIRECTORY IS EMPTY", 1u, 0);
 
-    const u32 count = ui_file_count < UI_FILE_VISIBLE_ENTRIES ?
-                      ui_file_count : UI_FILE_VISIBLE_ENTRIES;
+    const u32 remaining = ui_file_count > ui_file_first_entry ?
+        ui_file_count - ui_file_first_entry : 0u;
+    const u32 count = remaining < UI_FILE_VISIBLE_ENTRIES ?
+        remaining : UI_FILE_VISIBLE_ENTRIES;
     for (u32 i = 0u; i < count; ++i) {
+        const u32 entry_index = ui_file_first_entry + i;
         const u32 y = 155u + i * 25u;
-        const int selected = i == ui_file_selection;
+        const int selected = entry_index == ui_file_selection;
         mono_fill_rect(80u, y - 2u, 640u, 18u, selected);
-        mono_draw_text(92u, y, ui_file_entries[i].name, 1u, selected);
+        mono_draw_text(92u, y, ui_file_entries[entry_index].name, 1u, selected);
         mono_draw_text(610u, y,
-                       ui_file_entries[i].type == FS_ENTRY_DIRECTORY ? "DIR" : "FILE",
+                       ui_file_entries[entry_index].type == FS_ENTRY_DIRECTORY ? "DIR" : "FILE",
                        1u, selected);
     }
+
+    if (ui_file_count > UI_FILE_VISIBLE_ENTRIES) {
+        const u32 track_y = 154u;
+        const u32 track_height = 278u;
+        u32 thumb_height = (UI_FILE_VISIBLE_ENTRIES * (track_height - 2u)) / ui_file_count;
+        if (thumb_height < 18u) thumb_height = 18u;
+        if (thumb_height > track_height - 2u) thumb_height = track_height - 2u;
+        const u32 max_first = ui_file_count - UI_FILE_VISIBLE_ENTRIES;
+        const u32 thumb_range = track_height - thumb_height - 2u;
+        const u32 thumb_y = track_y + 1u +
+            (max_first == 0u ? 0u : ui_file_first_entry * thumb_range / max_first);
+        mono_outline_rect(730u, track_y, 10u, track_height, 1);
+        mono_fill_rect(733u, thumb_y, 4u, thumb_height, 1);
+    }
+
     mono_draw_text(80u, 468u, ui_status_message, 1u, 0);
     mono_draw_text(80u, 492u, "F2 REFRESH  N FILE  D DIRECTORY  R RENAME", 1u, 0);
 
@@ -1459,10 +1512,12 @@ static int ui_handle_file_manager_scancode(u8 scancode)
 
     if (scancode == 0x48u) {
         if (ui_file_count != 0u && ui_file_selection > 0u) --ui_file_selection;
+        ui_keep_file_selection_visible();
         return 1;
     }
     if (scancode == 0x50u) {
         if (ui_file_count != 0u && ui_file_selection + 1u < ui_file_count) ++ui_file_selection;
+        ui_keep_file_selection_visible();
         return 1;
     }
     if (scancode == 0x0Eu) {
@@ -1666,6 +1721,7 @@ static int handle_ui_scancode(u8 scancode)
         if (scancode == 0x05u) {
             ui_directory_depth = 0u;
             ui_file_selection = 0u;
+            ui_file_first_entry = 0u;
             ui_file_dialog = UI_FILE_DIALOG_NONE;
             ui_set_message("READY");
             active_screen = UI_SCREEN_FILES;
@@ -1921,10 +1977,13 @@ static void ui_mouse_click(u32 x, u32 y)
             return; /* File names are still typed with the keyboard. */
         }
         if (y >= 153u && y < 453u && x >= 80u && x <= 720u) {
-            const u32 selected = (y - 153u) / 25u;
-            if (selected < ui_file_count && selected < UI_FILE_VISIBLE_ENTRIES) {
-                ui_file_selection = selected;
-                (void)handle_ui_scancode(0x1Cu); /* Single-click opens an entry. */
+            const u32 visible_index = (y - 153u) / 25u;
+            if (visible_index < UI_FILE_VISIBLE_ENTRIES) {
+                const u32 selected = ui_file_first_entry + visible_index;
+                if (selected < ui_file_count) {
+                    ui_file_selection = selected;
+                    (void)handle_ui_scancode(0x1Cu); /* Single-click opens an entry. */
+                }
             }
             return;
         }
