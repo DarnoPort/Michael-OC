@@ -40,6 +40,7 @@ static fs_entry_t directory[FS_DIRECTORY_LIMIT];
 static u8 io_buffer[FS_SECTOR_SIZE] __attribute__((aligned(2)));
 static u32 mounted_total_sectors;
 static int mounted;
+static int mount_bitmap_repaired;
 
 static u32 text_length(const char *text)
 {
@@ -153,6 +154,15 @@ static int validate_directory(void)
         validation_bitmap[i] = 0u;
     }
 
+    /*
+     * The superblock, bitmap, and directory table occupy the fixed reserved
+     * prefix. Reconstruct these bits rather than trusting a potentially stale
+     * bitmap left by an interrupted allocation or deletion.
+     */
+    for (u32 sector = 0u; sector < FS_DATA_START; ++sector) {
+        validation_bitmap[sector >> 3u] |= (u8)(1u << (sector & 7u));
+    }
+
     for (u32 i = 0u; i < FS_DIRECTORY_LIMIT; ++i) {
         const fs_entry_t *entry = &directory[i];
         if (entry->type == 0u) continue;
@@ -181,12 +191,12 @@ static int validate_directory(void)
                     u8 *owner_byte = &validation_bitmap[sector >> 3u];
 
                     /*
-                     * Every referenced sector must be allocated and have
-                     * exactly one file owner. This rejects aliased extents,
-                     * which could otherwise make two files overwrite each
-                     * other's contents while still passing a simple bitmap test.
+                     * File extents are authoritative for data-sector ownership.
+                     * A missing bitmap bit can be restored. An already-owned
+                     * sector cannot be assigned to a second file: that is
+                     * ambiguous data ownership and mounting must fail.
                      */
-                    if (!bitmap_get(sector) || (*owner_byte & mask) != 0u) return 0;
+                    if ((*owner_byte & mask) != 0u) return 0;
                     *owner_byte |= mask;
                 }
             }
@@ -200,20 +210,25 @@ static int validate_directory(void)
     }
 
     /*
-     * Reconcile the allocation bitmap against the extents reachable from the
-     * directory. An allocated but unreferenced sector is stale/orphaned
-     * metadata; reject the volume instead of silently leaking disk capacity.
+     * The expected map is now derived from reserved structures and validated
+     * file extents. Repair stale/orphan bits, missing allocation bits, and
+     * out-of-range bits. This recovers common interrupted bitmap updates.
+     * It is not a journal and cannot repair arbitrary torn directory records.
      */
-    for (u32 sector = FS_DATA_START; sector < mounted_total_sectors; ++sector) {
-        const u8 mask = (u8)(1u << (sector & 7u));
-        const int has_owner =
-            (validation_bitmap[sector >> 3u] & mask) != 0u;
-        if (bitmap_get(sector) != has_owner) return 0;
+    int bitmap_differs = 0;
+    for (u32 i = 0u; i < FS_BITMAP_BYTES; ++i) {
+        if (bitmap[i] != validation_bitmap[i]) {
+            bitmap_differs = 1;
+            break;
+        }
     }
 
-    /* Bits outside the advertised disk size must never claim real storage. */
-    for (u32 sector = mounted_total_sectors; sector < FS_MAX_SECTORS; ++sector) {
-        if (bitmap_get(sector)) return 0;
+    if (bitmap_differs) {
+        for (u32 i = 0u; i < FS_BITMAP_BYTES; ++i) {
+            bitmap[i] = validation_bitmap[i];
+        }
+        if (!persist_bitmap()) return 0;
+        mount_bitmap_repaired = 1;
     }
 
     return 1;
@@ -221,6 +236,7 @@ static int validate_directory(void)
 int fs_mount(void)
 {
     mounted = 0;
+    mount_bitmap_repaired = 0;
     mounted_total_sectors = 0u;
     if (!ata_init() || ata_sector_count() < FS_DATA_START + 1u ||
         ata_sector_count() > FS_MAX_SECTORS) return 0;
@@ -248,14 +264,12 @@ int fs_mount(void)
             mounted_total_sectors = 0u; return 0;
         }
     }
-    for (u32 sector = 0u; sector < FS_DATA_START; ++sector) {
-        if (!bitmap_get(sector)) { mounted_total_sectors = 0u; return 0; }
-    }
     if (!validate_directory()) { mounted_total_sectors = 0u; return 0; }
     mounted = 1;
     return 1;
 }
 int fs_is_mounted(void) { return mounted; }
+int fs_mount_repaired_bitmap(void) { return mounted && mount_bitmap_repaired; }
 u32 fs_free_sectors(void)
 {
     if (!mounted) return 0u;

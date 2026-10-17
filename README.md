@@ -53,7 +53,7 @@ The `make test` suite builds and boots the ISO in QEMU, checks keyboard and mous
 
 - No per-process address spaces, ring-3 user mode, stable syscall ABI, native ELF loader, or process scheduler. Paging currently uses one global identity map, with kernel text protected from writes.
 - The interpreter operates in kernel context and supports only its documented instructions; it is not a security boundary.
-- MOCFS1 is a custom, fixed-table filesystem with contiguous file extents. Mount validation rejects malformed ownership metadata, but there is no journal or crash recovery.
+- MOCFS1 is a custom, fixed-table filesystem with contiguous file extents. Mount rebuilds the allocation bitmap from validated extents, repairs orphan/missing allocation bits, and rejects overlapping extents. It has no journal; torn multi-sector directory updates or interrupted in-place data writes can still require recovery.
 - PIT timer and PS/2 mouse support are rudimentary and do not provide preemptive scheduling.
 - The UI tools are kernel-resident screens rather than separate protected processes.
 

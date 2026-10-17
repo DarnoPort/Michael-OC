@@ -78,6 +78,20 @@ def create_corrupted_disk(create_script: Path, disk: Path, corruption: str) -> N
     disk.write_bytes(image)
 
 
+def find_root_file(image_path: Path, wanted_name: str) -> tuple[int, int, int, int]:
+    image = image_path.read_bytes()
+    header = struct.unpack_from("<8sIIIIIIIII", image, 0)
+    directory_offset = header[5] * 512
+    entry_count = header[8]
+    entry_size = header[9]
+    for index in range(entry_count):
+        entry = struct.unpack_from("<32sHBBIIH18s", image, directory_offset + index * entry_size)
+        name = entry[0].split(b"\x00", 1)[0].decode("ascii", errors="replace")
+        if entry[2] == 1 and entry[1] == 0xFFFF and name == wanted_name:
+            return (entry[4], entry[5], entry[6], header[7])
+    raise RuntimeError(f"root file not found in disk image: {wanted_name}")
+
+
 def require_mount_rejected(log: str, corruption: str) -> None:
     expected = "MICHAEL_OC_STORAGE_TEST_FAIL=MOUNT"
     if expected not in log:
@@ -105,15 +119,48 @@ def main() -> int:
     require(verify_log, ("MICHAEL_OC_BOOT_OK", "MICHAEL_OC_STORAGE_FS_OK", VERIFY_MARKER, CRUD_MARKER), "second boot")
     print("PASS: second cold QEMU boot recovered persisted bytes and passed filesystem CRUD checks.")
 
-    for corruption in ("overlapping-extents", "orphan-allocated-sector"):
-        corrupt_disk = args.work_dir / f"corrupt-{corruption}.img"
-        create_corrupted_disk(args.create_disk_script, corrupt_disk, corruption)
-        corrupt_log = run_phase(
-            args.qemu, args.iso, corrupt_disk,
-            args.work_dir / f"corrupt-{corruption}.log",
+    corrupt_disk = args.work_dir / "corrupt-overlapping-extents.img"
+    create_corrupted_disk(args.create_disk_script, corrupt_disk, "overlapping-extents")
+    corrupt_log = run_phase(
+        args.qemu, args.iso, corrupt_disk,
+        args.work_dir / "corrupt-overlapping-extents.log",
+    )
+    require_mount_rejected(corrupt_log, "overlapping-extents")
+    print("PASS: MOCFS1 mount rejected overlapping file extents.")
+
+    # A stray allocated bit is recoverable: the directory provides the source
+    # of truth for extents, so mounting rebuilds the bitmap and reuses the freed sector.
+    orphan_disk = args.work_dir / "corrupt-orphan-allocated-sector.img"
+    create_corrupted_disk(args.create_disk_script, orphan_disk, "orphan-allocated-sector")
+    orphan_log = run_phase(
+        args.qemu, args.iso, orphan_disk,
+        args.work_dir / "orphan-recovery-write.log",
+    )
+    require(
+        orphan_log,
+        ("MICHAEL_OC_BOOT_OK", "MICHAEL_OC_STORAGE_FS_OK",
+         "MICHAEL_OC_FS_BITMAP_REPAIRED", WRITE_MARKER),
+        "orphan bitmap recovery",
+    )
+    start_sector, size_bytes, sector_count, data_start = find_root_file(orphan_disk, "ci-persist.txt")
+    if start_sector != data_start + 1 or size_bytes == 0 or sector_count != 1:
+        raise RuntimeError(
+            "orphan recovery did not release the stray sector for the new file: "
+            f"start={start_sector}, size={size_bytes}, count={sector_count}, data_start={data_start}"
         )
-        require_mount_rejected(corrupt_log, corruption)
-        print(f"PASS: MOCFS1 mount rejected {corruption} metadata.")
+    print("PASS: MOCFS1 rebuilt an orphaned allocation bit and reused the recovered sector.")
+
+    recovered_log = run_phase(
+        args.qemu, args.iso, orphan_disk,
+        args.work_dir / "orphan-recovery-verify.log",
+    )
+    require(
+        recovered_log,
+        ("MICHAEL_OC_BOOT_OK", "MICHAEL_OC_STORAGE_FS_OK",
+         VERIFY_MARKER, CRUD_MARKER),
+        "orphan recovery persistence",
+    )
+    print("PASS: recovered filesystem remained valid and retained the new file after a cold reboot.")
 
     return 0
 if __name__ == "__main__":
