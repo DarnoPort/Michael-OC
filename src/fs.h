@@ -27,5 +27,7 @@ int fs_make_directory(u16 parent, const char *name, u16 *index_out);
 int fs_read_file(u16 index, u8 *buffer, u32 capacity, u32 *size_out);
 int fs_write_file(u16 index, const u8 *buffer, u32 size);
 int fs_rename(u16 index, const char *new_name);
+/* Move an entry into a directory; rejects name collisions and directory cycles. */
+int fs_move(u16 index, u16 new_parent);
 int fs_delete(u16 index);
 #endif

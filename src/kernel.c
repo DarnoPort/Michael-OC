@@ -73,6 +73,7 @@ enum ui_file_dialog_mode {
     UI_FILE_DIALOG_NEW_FILE,
     UI_FILE_DIALOG_NEW_DIRECTORY,
     UI_FILE_DIALOG_RENAME,
+    UI_FILE_DIALOG_MOVE_TO,
     UI_FILE_DIALOG_DELETE_CONFIRM
 };
 
@@ -1018,7 +1019,7 @@ static void draw_file_manager(void)
     draw_window_frame("FILE MANAGER");
     ui_refresh_file_list();
     mono_draw_text(80u, 118u, ui_directory_depth == 0u ? "ROOT" : "SUBDIRECTORY", 1u, 0);
-    mono_draw_text(250u, 118u, "N NEW D DIR R RENAME X DELETE", 1u, 0);
+    mono_draw_text(250u, 118u, "N NEW D DIR R RENAME M MOVE X DELETE", 1u, 0);
     mono_draw_text(80u, 132u, "ENTER OPEN BACKSPACE PARENT", 1u, 0);
     mono_draw_text(580u, 132u, "ITEM", 1u, 0);
     mono_draw_uint(610u, 132u, ui_file_count == 0u ? 0u : ui_file_selection + 1u, 1u);
@@ -1056,7 +1057,7 @@ static void draw_file_manager(void)
     }
 
     mono_draw_text(80u, 468u, ui_status_message, 1u, 0);
-    mono_draw_text(80u, 492u, "F2 REFRESH  N FILE  D DIRECTORY  R RENAME", 1u, 0);
+    mono_draw_text(80u, 492u, "F2 REFRESH  N FILE  D DIRECTORY  R RENAME  M MOVE", 1u, 0);
 
     if (ui_file_dialog != UI_FILE_DIALOG_NONE) {
         mono_fill_rect(125u, 215u, 550u, 112u, 1);
@@ -1067,6 +1068,8 @@ static void draw_file_manager(void)
             mono_draw_text(155u, 238u, "NEW DIRECTORY NAME", 1u, 1);
         else if (ui_file_dialog == UI_FILE_DIALOG_RENAME)
             mono_draw_text(155u, 238u, "RENAME TO", 1u, 1);
+        else if (ui_file_dialog == UI_FILE_DIALOG_MOVE_TO)
+            mono_draw_text(155u, 238u, "MOVE INTO DIRECTORY (OR PARENT)", 1u, 1);
         else {
             mono_draw_text(155u, 238u, "DELETE SELECTED ITEM?", 1u, 1);
             mono_draw_text(155u, 265u, "PRESS Y TO DELETE OR N TO CANCEL", 1u, 1);
@@ -1397,6 +1400,8 @@ static void ui_start_file_dialog(enum ui_file_dialog_mode mode)
         serial_write("MICHAEL_OC_FILE_DIALOG=NEW_DIRECTORY\r\n");
     else if (mode == UI_FILE_DIALOG_RENAME)
         serial_write("MICHAEL_OC_FILE_DIALOG=RENAME\r\n");
+    else if (mode == UI_FILE_DIALOG_MOVE_TO)
+        serial_write("MICHAEL_OC_FILE_DIALOG=MOVE_TO\r\n");
     else if (mode == UI_FILE_DIALOG_DELETE_CONFIRM)
         serial_write("MICHAEL_OC_FILE_DIALOG=DELETE_CONFIRM\r\n");
 }
@@ -1425,6 +1430,53 @@ static void ui_finish_file_dialog(void)
 
     if (ui_file_dialog_length == 0u) {
         ui_set_message("NAME CANNOT BE EMPTY");
+        return;
+    }
+
+    if (mode == UI_FILE_DIALOG_MOVE_TO) {
+        if (ui_file_selection >= ui_file_count) {
+            ui_set_message("SELECT AN ITEM FIRST");
+            return;
+        }
+
+        u16 source_index = 0u;
+        if (!fs_lookup(ui_current_directory(),
+                       ui_file_entries[ui_file_selection].name, &source_index)) {
+            ui_set_message("SOURCE ENTRY NOT FOUND");
+            return;
+        }
+
+        int move_to_parent = ui_file_dialog_length == 6u;
+        const char parent_word[] = "parent";
+        for (u32 i = 0u; i < 6u && move_to_parent; ++i) {
+            char ch = ui_file_dialog_buffer[i];
+            if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+            if (ch != parent_word[i]) move_to_parent = 0;
+        }
+
+        u16 destination_parent = FS_ROOT;
+        if (move_to_parent) {
+            if (ui_directory_depth == 0u) {
+                ui_set_message("ALREADY AT ROOT");
+                return;
+            }
+            destination_parent = ui_directory_depth == 1u ?
+                FS_ROOT : ui_directory_stack[ui_directory_depth - 2u];
+        } else if (!fs_lookup(ui_current_directory(),
+                              ui_file_dialog_buffer, &destination_parent)) {
+            ui_set_message("DESTINATION DIRECTORY NOT FOUND");
+            return;
+        }
+
+        if (!fs_move(source_index, destination_parent)) {
+            ui_set_message("MOVE FAILED: CHECK DIRECTORY");
+            return;
+        }
+
+        ui_set_message("ITEM MOVED");
+        ui_file_selection = 0u;
+        ui_refresh_file_list();
+        serial_write("MICHAEL_OC_ITEM_MOVED\r\n");
         return;
     }
 
@@ -1566,6 +1618,11 @@ static int ui_handle_file_manager_scancode(u8 scancode)
     }
     if (scancode == 0x13u) {
         if (ui_file_selection < ui_file_count) ui_start_file_dialog(UI_FILE_DIALOG_RENAME);
+        else ui_set_message("SELECT AN ITEM FIRST");
+        return 1;
+    }
+    if (scancode == 0x32u) {
+        if (ui_file_selection < ui_file_count) ui_start_file_dialog(UI_FILE_DIALOG_MOVE_TO);
         else ui_set_message("SELECT AN ITEM FIRST");
         return 1;
     }
@@ -2162,10 +2219,28 @@ static void storage_self_test(void)
         storage_test_fail("PERSISTENCE_VERIFY");
     serial_write("MICHAEL_OC_STORAGE_PHASE=VERIFY\r\n");
 
+    /*
+     * The third cold boot verifies that a cross-directory move was written to
+     * persistent metadata, not merely retained in the in-memory directory.
+     */
+    u16 target_index = 0u;
+    if (fs_lookup(FS_ROOT, "ci-target", &target_index)) {
+        u16 moved_index = 0u;
+        if (!fs_lookup(target_index, "renamed.txt", &moved_index) ||
+            !fs_read_file(moved_index, verify, sizeof(verify), &size) ||
+            size != sizeof(crud_payload) ||
+            !kernel_bytes_equal(verify, crud_payload, (u32)sizeof(crud_payload)))
+            storage_test_fail("MOVE_PERSISTENCE_VERIFY");
+        serial_write("MICHAEL_OC_STORAGE_MOVE_PERSIST_OK\r\n");
+        halt_forever();
+    }
+
     u16 folder_index = 0u;
     u16 nested_index = 0u;
     if (!fs_make_directory(FS_ROOT, "ci-folder", &folder_index))
         storage_test_fail("MKDIR");
+    if (!fs_make_directory(FS_ROOT, "ci-target", &target_index))
+        storage_test_fail("MKDIR_MOVE_TARGET");
     if (!fs_create_file(folder_index, "inside.txt", &nested_index))
         storage_test_fail("CREATE_NESTED_FILE");
     if (!fs_write_file(nested_index, crud_payload, (u32)sizeof(crud_payload)))
@@ -2176,22 +2251,55 @@ static void storage_self_test(void)
     if (!fs_list(folder_index, entries, 4u, &entry_count) ||
         entry_count != 1u || entries[0].type != FS_ENTRY_FILE)
         storage_test_fail("LIST_DIRECTORY");
-    if (!fs_rename(nested_index, "renamed.txt"))
-        storage_test_fail("RENAME_FILE");
-    u16 renamed_index = 0u;
-    if (fs_lookup(folder_index, "inside.txt", &renamed_index) ||
-        !fs_lookup(folder_index, "renamed.txt", &renamed_index) ||
-        renamed_index != nested_index)
-        storage_test_fail("LOOKUP_AFTER_RENAME");
-    if (!fs_read_file(renamed_index, verify, sizeof(verify), &size) ||
+
+    /* Moving a file preserves its entry identity and bytes, changing only its parent. */
+    u16 found_index = 0u;
+    if (!fs_move(nested_index, target_index))
+        storage_test_fail("MOVE_FILE");
+    if (fs_lookup(folder_index, "inside.txt", &found_index) ||
+        !fs_lookup(target_index, "inside.txt", &found_index) ||
+        found_index != nested_index)
+        storage_test_fail("LOOKUP_AFTER_MOVE");
+    if (!fs_read_file(found_index, verify, sizeof(verify), &size) ||
         size != sizeof(crud_payload) ||
         !kernel_bytes_equal(verify, crud_payload, (u32)sizeof(crud_payload)))
-        storage_test_fail("READ_RENAMED_FILE");
-    if (!fs_delete(renamed_index) || fs_lookup(folder_index, "renamed.txt", &renamed_index))
-        storage_test_fail("DELETE_FILE");
-    if (!fs_delete(folder_index)) storage_test_fail("DELETE_EMPTY_DIRECTORY");
+        storage_test_fail("READ_MOVED_FILE");
+
+    if (!fs_rename(nested_index, "renamed.txt"))
+        storage_test_fail("RENAME_MOVED_FILE");
+    if (fs_lookup(target_index, "inside.txt", &found_index) ||
+        !fs_lookup(target_index, "renamed.txt", &found_index) ||
+        found_index != nested_index)
+        storage_test_fail("LOOKUP_AFTER_RENAME");
+
+    /* Reject placing a directory inside one of its own descendants. */
+    u16 child_index = 0u;
+    if (!fs_make_directory(folder_index, "ci-child", &child_index))
+        storage_test_fail("MKDIR_CHILD");
+    if (fs_move(folder_index, child_index))
+        storage_test_fail("DIRECTORY_CYCLE_ACCEPTED");
+    if (!fs_move(child_index, target_index) ||
+        !fs_lookup(target_index, "ci-child", &found_index) ||
+        found_index != child_index)
+        storage_test_fail("MOVE_DIRECTORY");
+    if (!fs_delete(child_index))
+        storage_test_fail("DELETE_MOVED_CHILD");
+
+    /* Moving an empty directory in and back out must preserve its identity. */
+    if (!fs_move(folder_index, target_index) ||
+        fs_lookup(FS_ROOT, "ci-folder", &found_index) ||
+        !fs_lookup(target_index, "ci-folder", &found_index) ||
+        found_index != folder_index)
+        storage_test_fail("MOVE_DIRECTORY_INTO_TARGET");
+    if (!fs_move(folder_index, FS_ROOT) ||
+        !fs_lookup(FS_ROOT, "ci-folder", &found_index) ||
+        found_index != folder_index)
+        storage_test_fail("MOVE_DIRECTORY_BACK_TO_ROOT");
+    if (!fs_delete(folder_index))
+        storage_test_fail("DELETE_EMPTY_DIRECTORY");
 
     serial_write("MICHAEL_OC_STORAGE_CRUD_OK\r\n");
+    serial_write("MICHAEL_OC_STORAGE_MOVE_OK\r\n");
     halt_forever();
 }
 
