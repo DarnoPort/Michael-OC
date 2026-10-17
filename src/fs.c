@@ -21,6 +21,7 @@
 #define FS_JOURNAL_MAGIC 0x314A4F4Du
 #define FS_JOURNAL_DIRECTORY 1u
 #define FS_JOURNAL_BITMAP 2u
+#define FS_JOURNAL_TRANSACTION 3u
 
 typedef struct __attribute__((packed)) {
     u8 magic[8];
@@ -139,24 +140,44 @@ static int recover_journal(int mark_mount_recovery)
         ((u8 *)&pending)[i] = io_buffer[i];
 
     if (pending.magic == 0u) return 1;
-    if (pending.magic != FS_JOURNAL_MAGIC ||
-        pending.sector_count != FS_DIRECTORY_SECTORS) return 0;
-    if (pending.kind != FS_JOURNAL_DIRECTORY &&
-        pending.kind != FS_JOURNAL_BITMAP) return 0;
-    if (pending.target_start != journal_target_start(pending.kind)) return 0;
+    if (pending.magic != FS_JOURNAL_MAGIC) return 0;
 
-    const u32 shadow_start = journal_shadow_start(pending.kind);
+    u32 shadow_start = 0u;
+    u32 sector_count = 0u;
+    if (pending.kind == FS_JOURNAL_DIRECTORY || pending.kind == FS_JOURNAL_BITMAP) {
+        if (pending.sector_count != FS_DIRECTORY_SECTORS ||
+            pending.target_start != journal_target_start(pending.kind)) return 0;
+        shadow_start = journal_shadow_start(pending.kind);
+        sector_count = FS_DIRECTORY_SECTORS;
+    } else if (pending.kind == FS_JOURNAL_TRANSACTION) {
+        if (pending.sector_count != FS_DIRECTORY_SECTORS + FS_BITMAP_SECTORS ||
+            pending.target_start != FS_DIRECTORY_START) return 0;
+        /* The two eight-sector shadows are adjacent: directory first, bitmap second. */
+        shadow_start = FS_DIRECTORY_JOURNAL_START;
+        sector_count = FS_DIRECTORY_SECTORS + FS_BITMAP_SECTORS;
+    } else {
+        return 0;
+    }
+
     u32 checksum = 2166136261u;
-    for (u32 sector = 0u; sector < pending.sector_count; ++sector) {
+    for (u32 sector = 0u; sector < sector_count; ++sector) {
         if (!ata_read_sector(shadow_start + sector, io_buffer)) return 0;
         for (u32 byte = 0u; byte < FS_SECTOR_SIZE; ++byte)
             checksum = (checksum ^ io_buffer[byte]) * 16777619u;
     }
     if (checksum != pending.checksum) return 0;
 
-    for (u32 sector = 0u; sector < pending.sector_count; ++sector) {
+    for (u32 sector = 0u; sector < sector_count; ++sector) {
+        u32 target_sector;
+        if (pending.kind == FS_JOURNAL_TRANSACTION) {
+            target_sector = sector < FS_DIRECTORY_SECTORS ?
+                FS_DIRECTORY_START + sector :
+                FS_BITMAP_START + (sector - FS_DIRECTORY_SECTORS);
+        } else {
+            target_sector = pending.target_start + sector;
+        }
         if (!ata_read_sector(shadow_start + sector, io_buffer) ||
-            !ata_write_sector(pending.target_start + sector, io_buffer)) return 0;
+            !ata_write_sector(target_sector, io_buffer)) return 0;
     }
 
     for (u32 byte = 0u; byte < FS_SECTOR_SIZE; ++byte) io_buffer[byte] = 0u;
@@ -212,6 +233,48 @@ static int persist_bitmap(void)
 static int persist_directory(void)
 {
     return persist_metadata(FS_JOURNAL_DIRECTORY, (const u8 *)directory);
+}
+
+/*
+ * Commit a logically coupled directory-table + allocation-bitmap update with
+ * one durable journal record. The directory shadow occupies sectors 18..25
+ * and the bitmap shadow 26..33, so a single checksum covers all 16 sectors.
+ */
+static int persist_metadata_transaction(void)
+{
+    if (!journal_enabled || !recover_journal(0)) return 0;
+
+    const u8 *directory_bytes = (const u8 *)directory;
+    for (u32 sector = 0u; sector < FS_DIRECTORY_SECTORS; ++sector) {
+        if (!ata_write_sector(FS_DIRECTORY_JOURNAL_START + sector,
+                              &directory_bytes[sector * FS_SECTOR_SIZE])) return 0;
+    }
+    for (u32 sector = 0u; sector < FS_BITMAP_SECTORS; ++sector) {
+        if (!ata_write_sector(FS_BITMAP_JOURNAL_START + sector,
+                              &bitmap[sector * FS_SECTOR_SIZE])) return 0;
+    }
+
+    u32 checksum = 2166136261u;
+    for (u32 byte = 0u; byte < FS_DIRECTORY_SECTORS * FS_SECTOR_SIZE; ++byte)
+        checksum = (checksum ^ directory_bytes[byte]) * 16777619u;
+    for (u32 byte = 0u; byte < FS_BITMAP_SECTORS * FS_SECTOR_SIZE; ++byte)
+        checksum = (checksum ^ bitmap[byte]) * 16777619u;
+
+    fs_journal_header_t header;
+    for (u32 byte = 0u; byte < sizeof(header); ++byte)
+        ((u8 *)&header)[byte] = 0u;
+    header.magic = FS_JOURNAL_MAGIC;
+    header.kind = FS_JOURNAL_TRANSACTION;
+    header.sector_count = FS_DIRECTORY_SECTORS + FS_BITMAP_SECTORS;
+    header.checksum = checksum;
+    header.target_start = FS_DIRECTORY_START;
+
+    /* One sector atomically publishes the prepared pair of metadata tables. */
+    if (!ata_write_sector(FS_JOURNAL_HEADER_SECTOR, &header)) return 0;
+
+    /* A committed record remains replayable even if this immediate replay fails. */
+    (void)recover_journal(0);
+    return 1;
 }
 static int valid_parent(u16 parent)
 {
@@ -492,6 +555,47 @@ int fs_write_file(u16 index, const u8 *buffer, u32 size)
     u32 new_start = 0u;
 
     /*
+     * The v2 path leaves on-disk metadata untouched while writing the new
+     * extent, then commits the replacement and both allocation changes in one
+     * directory+bitmap journal transaction. A crash before the commit leaves
+     * the old file fully referenced; a crash after it replays the whole update.
+     */
+    if (journal_enabled) {
+        if (needed != 0u) {
+            if (!allocate_contiguous(needed, &new_start)) return 0;
+
+            u32 copied = 0u;
+            for (u32 sector = 0u; sector < needed; ++sector) {
+                for (u32 byte = 0u; byte < FS_SECTOR_SIZE; ++byte) {
+                    const u32 position = copied + byte;
+                    io_buffer[byte] = position < size ? buffer[position] : 0u;
+                }
+                if (!ata_write_sector(new_start + sector, io_buffer)) return 0;
+                copied += FS_SECTOR_SIZE;
+            }
+        }
+
+        directory[index].start_sector = needed == 0u ? 0u : new_start;
+        directory[index].size_bytes = size;
+        directory[index].sector_count = (u16)needed;
+        mark_extent(new_start, needed, 1);
+        mark_extent(old_start, old_count, 0);
+        if (!persist_metadata_transaction()) {
+            directory[index].start_sector = old_start;
+            directory[index].size_bytes = old_size;
+            directory[index].sector_count = (u16)old_count;
+            mark_extent(new_start, needed, 0);
+            mark_extent(old_start, old_count, 1);
+            return 0;
+        }
+        return 1;
+    }
+
+    /*
+     * Legacy v1 filesystems do not have a journal, so retain their compatible
+     * write ordering and best-effort bitmap recovery path below.
+     */ 
+    /*
      * Copy-on-write: never overwrite sectors still referenced by the visible
      * directory entry. Reserve and fill a different extent first, then publish
      * the new extent through the journaled directory table.
@@ -582,6 +686,44 @@ int fs_copy_file(u16 index, u16 new_parent, const char *new_name, u16 *index_out
     const u32 needed = (size + FS_SECTOR_SIZE - 1u) / FS_SECTOR_SIZE;
     u32 new_start = 0u;
     if (needed != 0u && !allocate_contiguous(needed, &new_start)) return 0;
+
+    if (journal_enabled) {
+        if (needed != 0u) {
+            u32 copied = 0u;
+            for (u32 sector = 0u; sector < needed; ++sector) {
+                if (!ata_read_sector(source->start_sector + sector, io_buffer)) return 0;
+                const u32 remaining = size - copied;
+                const u32 amount = remaining < FS_SECTOR_SIZE ?
+                    remaining : FS_SECTOR_SIZE;
+                for (u32 byte = amount; byte < FS_SECTOR_SIZE; ++byte)
+                    io_buffer[byte] = 0u;
+                if (!ata_write_sector(new_start + sector, io_buffer)) return 0;
+                copied += amount;
+            }
+        }
+
+        fs_entry_t *destination = &directory[new_index];
+        for (u32 byte = 0u; byte < sizeof(fs_entry_t); ++byte)
+            ((u8 *)destination)[byte] = 0u;
+        const u32 name_length = text_length(new_name);
+        for (u32 byte = 0u; byte < name_length; ++byte)
+            destination->name[byte] = new_name[byte];
+        destination->parent_index = new_parent;
+        destination->type = FS_ENTRY_FILE;
+        destination->start_sector = needed == 0u ? 0u : new_start;
+        destination->size_bytes = size;
+        destination->sector_count = (u16)needed;
+
+        mark_extent(new_start, needed, 1);
+        if (!persist_metadata_transaction()) {
+            for (u32 byte = 0u; byte < sizeof(fs_entry_t); ++byte)
+                ((u8 *)destination)[byte] = 0u;
+            mark_extent(new_start, needed, 0);
+            return 0;
+        }
+        *index_out = new_index;
+        return 1;
+    }
 
     /*
      * Reserve the new extent before writing its bytes. The destination entry is
@@ -695,6 +837,16 @@ int fs_delete(u16 index)
     u8 *dst = (u8 *)&old;
     for (u32 i = 0u; i < sizeof(fs_entry_t); ++i) dst[i] = src[i];
     for (u32 i = 0u; i < sizeof(fs_entry_t); ++i) ((u8 *)&directory[index])[i] = 0u;
+    if (journal_enabled) {
+        mark_extent(old_start, old_count, 0);
+        if (!persist_metadata_transaction()) {
+            for (u32 i = 0u; i < sizeof(fs_entry_t); ++i)
+                ((u8 *)&directory[index])[i] = ((u8 *)&old)[i];
+            mark_extent(old_start, old_count, 1);
+            return 0;
+        }
+        return 1;
+    }
     if (!persist_directory()) {
         for (u32 i = 0u; i < sizeof(fs_entry_t); ++i) ((u8 *)&directory[index])[i] = ((u8 *)&old)[i];
         return 0;
