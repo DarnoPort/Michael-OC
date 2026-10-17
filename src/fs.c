@@ -426,6 +426,41 @@ int fs_rename(u16 index, const char *new_name)
     }
     return 1;
 }
+int fs_move(u16 index, u16 new_parent)
+{
+    if (!mounted || index >= FS_DIRECTORY_LIMIT ||
+        directory[index].type == 0u || !valid_parent(new_parent)) return 0;
+
+    const u16 old_parent = directory[index].parent_index;
+    if (new_parent == old_parent) return 1;
+
+    if (directory[index].type == FS_ENTRY_DIRECTORY) {
+        /*
+         * A directory must never be moved below itself. Walk the destination's
+         * ancestor chain before changing any metadata; malformed chains fail
+         * closed instead of risking an on-disk cycle.
+         */
+        u16 ancestor = new_parent;
+        for (u32 depth = 0u; depth < FS_DIRECTORY_LIMIT; ++depth) {
+            if (ancestor == index) return 0;
+            if (ancestor == FS_ROOT) break;
+            if (ancestor >= FS_DIRECTORY_LIMIT ||
+                directory[ancestor].type != FS_ENTRY_DIRECTORY) return 0;
+            ancestor = directory[ancestor].parent_index;
+        }
+        if (ancestor != FS_ROOT) return 0;
+    }
+
+    if (name_exists(new_parent, directory[index].name)) return 0;
+
+    directory[index].parent_index = new_parent;
+    if (!persist_directory()) {
+        directory[index].parent_index = old_parent;
+        return 0;
+    }
+    return 1;
+}
+
 int fs_delete(u16 index)
 {
     if (!mounted || index >= FS_DIRECTORY_LIMIT || directory[index].type == 0u) return 0;

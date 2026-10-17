@@ -24,8 +24,8 @@
 | PS/2 keyboard IRQ1 | Verified | Latest QEMU keyboard test exercises key delivery, navigation, and the debug console |
 | Physical page allocator | Verified | RAM-map parsing and allocation/free self-test; paging now also enabled |
 | ATA PIO disk driver | Verified | QEMU persistence and filesystem integration tests use the primary-master IDE device |
-| MOCFS1 persistent filesystem | Modified, pending verification | This change rebuilds the bitmap from validated extents, repairs orphan/missing bits, and retains rejection of overlapping extents; journaling remains unimplemented |
-| File manager and text editor | Scroll extension pending verification | Existing CRUD/editor paths are verified; this change adds a 21-entry QEMU navigation test to exercise selection beyond the first 12 visible rows |
+| MOCFS1 persistent filesystem | Move extension pending verification | Mount validates extents and repairs recoverable bitmap inconsistencies; this branch adds cross-directory moves, cycle rejection, and a cold-boot move-persistence test; journaling remains unimplemented |
+| File manager and text editor | Move extension pending verification | Existing CRUD/editor and 21-entry scrolling paths pass QEMU tests; this branch adds a move dialog for child directories or the current directory's parent |
 | MOCApp on-disk interpreter | Verified by integration test | Latest CI exercised PRINT, WAITKEY, IFKEY/JUMP, SET/ADD/PRINTNUM and filesystem LS/READ/WRITE |
 | MOCApp file-manager workflow | Verified by integration test | Disk-resident script launch and exit path passed QEMU app test; host installer has separate checks |
 | Paging and virtual memory | Partial, verified | 4 KiB global supervisor identity map, absent null page, CR0.WP and read-only kernel text; no per-process address spaces |
@@ -72,12 +72,11 @@ The latest successful pull-request workflow, [38988825037](https://github.com/Da
 
 ## Next tasks
 
-1. Verify mount-time bitmap repair against an orphan-sector QEMU boot/reboot test before merging this change.
-2. Improve crash consistency for metadata and data updates, using a recoverable commit protocol or journaling.
-3. Revisit fixed directory capacity and contiguous extents; fragmentation can exhaust contiguous free space before total free space is exhausted.
-4. Add a ring-3 execution path with a TSS, explicit syscall ABI, and a strict user/kernel boundary.
-5. Introduce per-process page tables and safe page reclamation before loading native executable images.
-6. Add a basic scheduler only after user-mode context switching and timer semantics are tested.
+1. Improve crash consistency for metadata and data updates, using a recoverable commit protocol or journaling.
+2. Revisit fixed directory capacity and contiguous extents; fragmentation can exhaust contiguous free space before total free space is exhausted.
+3. Add a ring-3 execution path with a TSS, explicit syscall ABI, and a strict user/kernel boundary.
+4. Introduce per-process page tables and safe page reclamation before loading native executable images.
+5. Add a basic scheduler only after user-mode context switching and timer semantics are tested.
 
 ## Verification policy
 

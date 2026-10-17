@@ -33,7 +33,7 @@ The build creates build/michael-oc.iso. The first make run creates a 16 MiB disk
 
 Home-screen shortcuts: 1 opens system status, 2 keyboard diagnostics, 3 the framebuffer test, 4 the file manager, and 5 the welcome document in the editor. Press Escape to return to the home screen except when a script is running, where Escape returns to the file manager.
 
-In the file manager, use the arrow keys to select entries, Enter to open files or directories, Backspace to go to the parent directory, N to create a file, D to create a directory, R to rename, X to delete with confirmation, and F2 to refresh. The text editor uses arrows to navigate, Backspace/Delete to edit, Enter for newline, and F2 to save. The file manager shows 12 rows at a time and scrolls automatically as the selection moves through larger directories; the current item counter and scrollbar indicate position.
+In the file manager, use the arrow keys to select entries, Enter to open files or directories, Backspace to go to the parent directory, N to create a file, D to create a directory, R to rename, M to move, X to delete with confirmation, and F2 to refresh. The file manager shows 12 rows at a time and scrolls automatically as the selection moves through larger directories; the current item counter and scrollbar indicate position. To move an item, press M and enter the destination directory name in the current folder, or type PARENT to move it into the current folder's parent. Moves reject duplicate names and directory cycles. The text editor uses arrows to navigate, Backspace/Delete to edit, Enter for newline, and F2 to save.
 
 ## Creating and running an app
 
