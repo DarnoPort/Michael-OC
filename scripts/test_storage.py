@@ -118,7 +118,8 @@ def main() -> int:
     verify_log = run_phase(args.qemu, args.iso, args.disk, args.work_dir / "storage-verify.log")
     require(verify_log, ("MICHAEL_OC_BOOT_OK", "MICHAEL_OC_STORAGE_FS_OK", VERIFY_MARKER, CRUD_MARKER), "second boot")
     require(verify_log, ("MICHAEL_OC_STORAGE_MOVE_OK",), "move and directory-cycle tests")
-    print("PASS: filesystem moved files and directories, rejected a directory cycle, and retained moved bytes.")
+    require(verify_log, ("MICHAEL_OC_STORAGE_COPY_OK",), "file copy and multi-sector tests")
+    print("PASS: filesystem moved files/directories and copied single-/multi-sector files.")
 
     moved_log = run_phase(
         args.qemu, args.iso, args.disk,
@@ -127,10 +128,11 @@ def main() -> int:
     require(
         moved_log,
         ("MICHAEL_OC_BOOT_OK", "MICHAEL_OC_STORAGE_FS_OK",
-         VERIFY_MARKER, "MICHAEL_OC_STORAGE_MOVE_PERSIST_OK"),
+         VERIFY_MARKER, "MICHAEL_OC_STORAGE_MOVE_PERSIST_OK",
+         "MICHAEL_OC_STORAGE_COPY_PERSIST_OK"),
         "move persistence after cold reboot",
     )
-    print("PASS: cross-directory move metadata and file contents survived a cold QEMU reboot.")
+    print("PASS: move and copy metadata/content survived a cold QEMU reboot.")
 
     corrupt_disk = args.work_dir / "corrupt-overlapping-extents.img"
     create_corrupted_disk(args.create_disk_script, corrupt_disk, "overlapping-extents")

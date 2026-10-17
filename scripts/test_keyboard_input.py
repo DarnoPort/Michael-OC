@@ -226,7 +226,17 @@ def main() -> int:
         send_command(monitor, "sendkey esc")
         send_command(monitor, "sendkey esc")
 
-        print("PASS: keyboard IRQ navigated the UI, executed console commands, and scrolled/opened the last file in a 21-entry directory.")
+        # Return to the root and copy the seeded app using the file manager UI.
+        send_command(monitor, "sendkey 4")
+        wait_for_marker(serial_log, "MICHAEL_OC_UI_SCREEN=FILES", process, 3.0)
+        send_command(monitor, "sendkey c")
+        wait_for_marker(serial_log, "MICHAEL_OC_FILE_DIALOG=COPY_FILE", process, 3.0)
+        for character in "welcomecopy":
+            send_command(monitor, f"sendkey {character}")
+        send_command(monitor, "sendkey ret")
+        wait_for_marker(serial_log, "MICHAEL_OC_FILE_COPIED=welcomecopy", process, 3.0)
+
+        print("PASS: keyboard IRQ navigated the UI, scrolled a 21-entry directory, and copied a disk app from the file manager.")
         return 0
     except Exception as exc:
         print(f"FAIL: keyboard input test: {exc}", file=sys.stderr)

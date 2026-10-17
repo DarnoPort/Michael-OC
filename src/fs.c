@@ -426,6 +426,85 @@ int fs_rename(u16 index, const char *new_name)
     }
     return 1;
 }
+int fs_copy_file(u16 index, u16 new_parent, const char *new_name, u16 *index_out)
+{
+    if (!mounted || index >= FS_DIRECTORY_LIMIT ||
+        directory[index].type != FS_ENTRY_FILE || index_out == 0 ||
+        !valid_parent(new_parent) || !valid_name(new_name) ||
+        name_exists(new_parent, new_name)) return 0;
+
+    u16 new_index = 0u;
+    if (!find_free_entry(&new_index)) return 0;
+
+    const fs_entry_t *source = &directory[index];
+    const u32 size = source->size_bytes;
+    const u32 needed = (size + FS_SECTOR_SIZE - 1u) / FS_SECTOR_SIZE;
+    u32 new_start = 0u;
+    if (needed != 0u && !allocate_contiguous(needed, &new_start)) return 0;
+
+    /*
+     * Reserve the new extent before writing its bytes. The destination entry is
+     * not made visible until every sector has been copied successfully.
+     */
+    if (needed != 0u) {
+        mark_extent(new_start, needed, 1);
+        if (!persist_bitmap()) {
+            mark_extent(new_start, needed, 0);
+            (void)persist_bitmap();
+            return 0;
+        }
+
+        u32 copied = 0u;
+        for (u32 sector = 0u; sector < needed; ++sector) {
+            if (!ata_read_sector(source->start_sector + sector, io_buffer)) {
+                mark_extent(new_start, needed, 0);
+                (void)persist_bitmap();
+                return 0;
+            }
+
+            const u32 remaining = size - copied;
+            const u32 amount = remaining < FS_SECTOR_SIZE ?
+                remaining : FS_SECTOR_SIZE;
+            /* Do not copy stale bytes past EOF into the new extent. */
+            for (u32 byte = amount; byte < FS_SECTOR_SIZE; ++byte)
+                io_buffer[byte] = 0u;
+
+            if (!ata_write_sector(new_start + sector, io_buffer)) {
+                mark_extent(new_start, needed, 0);
+                (void)persist_bitmap();
+                return 0;
+            }
+            copied += amount;
+        }
+    }
+
+    fs_entry_t *destination = &directory[new_index];
+    for (u32 byte = 0u; byte < sizeof(fs_entry_t); ++byte)
+        ((u8 *)destination)[byte] = 0u;
+    const u32 name_length = text_length(new_name);
+    for (u32 byte = 0u; byte < name_length; ++byte)
+        destination->name[byte] = new_name[byte];
+    destination->parent_index = new_parent;
+    destination->type = FS_ENTRY_FILE;
+    destination->start_sector = needed == 0u ? 0u : new_start;
+    destination->size_bytes = size;
+    destination->sector_count = (u16)needed;
+
+    if (!persist_directory()) {
+        for (u32 byte = 0u; byte < sizeof(fs_entry_t); ++byte)
+            ((u8 *)destination)[byte] = 0u;
+        (void)persist_directory();
+        if (needed != 0u) {
+            mark_extent(new_start, needed, 0);
+            (void)persist_bitmap();
+        }
+        return 0;
+    }
+
+    *index_out = new_index;
+    return 1;
+}
+
 int fs_move(u16 index, u16 new_parent)
 {
     if (!mounted || index >= FS_DIRECTORY_LIMIT ||
