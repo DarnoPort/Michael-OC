@@ -60,8 +60,9 @@ def main() -> int:
             raise AssertionError(f"installer failed: {result.stderr}\n{result.stdout}")
 
         image = disk.read_bytes()
+        header_after_install = struct.unpack_from(SUPER_FMT, image, 0)
         index, start, size, count = find_root_file(image, "external.mapp")
-        if size != len(payload) or count != 1 or start < 18:
+        if size != len(payload) or count != 1 or start < header_after_install[7]:
             raise AssertionError(f"bad installed entry: index={index}, start={start}, size={size}, count={count}")
         recovered = image[start * SECTOR_SIZE:(start + count) * SECTOR_SIZE][:size]
         if recovered != payload:
@@ -117,7 +118,29 @@ def main() -> int:
         if disk.read_bytes() != before:
             raise AssertionError("failed unsupported-file installation modified the image")
 
-    print("PASS: external MOCApp install, on-disk metadata/data validation, duplicate rejection, size checks, and failure atomicity.")
+        # Existing v1 images remain usable and retain their original data offset.
+        legacy_disk = root / "legacy-v1.img"
+        create_image(legacy_disk, version=1)
+        legacy_result = run_cli(source, legacy_disk, source)
+        if legacy_result.returncode != 0:
+            raise AssertionError(f"installer rejected a legacy v1 image: {legacy_result.stderr}")
+        legacy_image = legacy_disk.read_bytes()
+        legacy_header = struct.unpack_from(SUPER_FMT, legacy_image, 0)
+        legacy_index, legacy_start, legacy_size, legacy_count = find_root_file(
+            legacy_image, "external.mapp"
+        )
+        if (legacy_header[1] != 1 or legacy_start < legacy_header[7] or
+                legacy_size != len(payload) or legacy_count != 1):
+            raise AssertionError(
+                f"legacy v1 compatibility failed: version={legacy_header[1]}, index={legacy_index}, "
+                f"start={legacy_start}, data_start={legacy_header[7]}"
+            )
+        legacy_data = legacy_image[legacy_start * SECTOR_SIZE:
+                                   (legacy_start + legacy_count) * SECTOR_SIZE][:legacy_size]
+        if legacy_data != payload:
+            raise AssertionError("legacy v1 installed script bytes do not match the source")
+
+    print("PASS: external MOCApp install on MOCFS1 v1/v2, metadata/data validation, duplicate rejection, size checks, and failure atomicity.")
     return 0
 
 

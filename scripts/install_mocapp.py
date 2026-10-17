@@ -13,12 +13,21 @@ from pathlib import Path
 
 SECTOR_SIZE = 512
 MAGIC = b"MOCFS1\x00\x00"
-VERSION = 1
+VERSION_V1 = 1
+VERSION_V2 = 2
+SUPPORTED_VERSIONS = (VERSION_V1, VERSION_V2)
 BITMAP_START = 1
 BITMAP_SECTORS = 8
 DIRECTORY_START = 9
 DIRECTORY_SECTORS = 8
-DATA_START = 17
+V1_DATA_START = 17
+V2_DATA_START = 34
+JOURNAL_HEADER_SECTOR = 17
+DIRECTORY_JOURNAL_START = 18
+BITMAP_JOURNAL_START = 26
+JOURNAL_MAGIC = 0x314A4F4D
+JOURNAL_DIRECTORY = 1
+JOURNAL_BITMAP = 2
 DIRECTORY_ENTRIES = 64
 ENTRY_SIZE = 64
 MAX_SECTORS = BITMAP_SECTORS * SECTOR_SIZE * 8
@@ -66,8 +75,48 @@ def bitmap_used(bitmap: bytes, sector: int) -> bool:
     return bool(bitmap[sector >> 3] & (1 << (sector & 7)))
 
 
-def validate_image(image: bytes):
-    if len(image) < (DATA_START + 1) * SECTOR_SIZE or len(image) % SECTOR_SIZE:
+def journal_checksum(payload: bytes) -> int:
+    checksum = 2166136261
+    for byte in payload:
+        checksum = ((checksum ^ byte) * 16777619) & 0xFFFFFFFF
+    return checksum
+
+
+def recover_pending_journal(image: bytearray, version: int) -> bool:
+    """Replay a committed v2 metadata transaction before the host edits the image."""
+    if version == VERSION_V1:
+        return False
+    header_offset = JOURNAL_HEADER_SECTOR * SECTOR_SIZE
+    magic, kind, sector_count, checksum, target_start = struct.unpack_from(
+        "<IIIII", image, header_offset
+    )
+    if magic == 0:
+        return False
+    if magic != JOURNAL_MAGIC or sector_count != DIRECTORY_SECTORS:
+        raise ValueError("MOCFS1 v2 journal header is invalid; refusing to modify the image")
+    if kind == JOURNAL_DIRECTORY:
+        expected_target, shadow_start = DIRECTORY_START, DIRECTORY_JOURNAL_START
+    elif kind == JOURNAL_BITMAP:
+        expected_target, shadow_start = BITMAP_START, BITMAP_JOURNAL_START
+    else:
+        raise ValueError("MOCFS1 journal has an unknown metadata transaction type")
+    if target_start != expected_target:
+        raise ValueError("MOCFS1 journal target does not match its transaction type")
+
+    payload_offset = shadow_start * SECTOR_SIZE
+    payload_size = sector_count * SECTOR_SIZE
+    payload = bytes(image[payload_offset:payload_offset + payload_size])
+    if len(payload) != payload_size or journal_checksum(payload) != checksum:
+        raise ValueError("MOCFS1 journal payload checksum failed; refusing to modify the image")
+
+    target_offset = target_start * SECTOR_SIZE
+    image[target_offset:target_offset + payload_size] = payload
+    image[header_offset:header_offset + SECTOR_SIZE] = bytes(SECTOR_SIZE)
+    return True
+
+
+def validate_image(image: bytearray):
+    if len(image) < (V1_DATA_START + 1) * SECTOR_SIZE or len(image) % SECTOR_SIZE:
         raise ValueError("disk image size is not a valid MOCFS1 sector-aligned image")
 
     total_sectors = len(image) // SECTOR_SIZE
@@ -76,8 +125,9 @@ def validate_image(image: bytes):
         directory_start, directory_sectors, data_start, entry_count, entry_size,
     ) = struct.unpack_from(SUPER_FMT, image, 0)
 
-    if magic != MAGIC or version != VERSION:
+    if magic != MAGIC or version not in SUPPORTED_VERSIONS:
         raise ValueError("disk image does not contain a supported MOCFS1 superblock")
+    expected_data_start = V1_DATA_START if version == VERSION_V1 else V2_DATA_START
     if sb_total != total_sectors or total_sectors > MAX_SECTORS:
         raise ValueError("MOCFS1 sector count does not match the image or exceeds bitmap capacity")
     geometry = (
@@ -86,14 +136,16 @@ def validate_image(image: bytes):
     )
     expected_geometry = (
         BITMAP_START, BITMAP_SECTORS, DIRECTORY_START, DIRECTORY_SECTORS,
-        DATA_START, DIRECTORY_ENTRIES, ENTRY_SIZE,
+        expected_data_start, DIRECTORY_ENTRIES, ENTRY_SIZE,
     )
     if geometry != expected_geometry:
         raise ValueError("MOCFS1 metadata geometry is unsupported")
 
+    recover_pending_journal(image, version)
+
     bitmap_offset = BITMAP_START * SECTOR_SIZE
     bitmap = bytearray(image[bitmap_offset:bitmap_offset + BITMAP_SECTORS * SECTOR_SIZE])
-    for sector in range(DATA_START):
+    for sector in range(data_start):
         if not bitmap_used(bitmap, sector):
             raise ValueError(f"filesystem metadata sector {sector} is marked free")
 
@@ -169,7 +221,7 @@ def validate_image(image: bytes):
                 raise ValueError(f"empty file entry {index} has a nonzero start sector")
             continue
         if (
-            entry["start"] < DATA_START or entry["start"] >= total_sectors or
+            entry["start"] < data_start or entry["start"] >= total_sectors or
             expected_count > total_sectors - entry["start"]
         ):
             raise ValueError(f"file entry {index} has an invalid data extent")
@@ -208,6 +260,7 @@ def install(disk_path: Path, source_path: Path, name: str | None = None) -> None
     original_stat = disk_path.stat()
     image = bytearray(disk_path.read_bytes())
     total_sectors, bitmap, directory, entries, bitmap_offset, directory_offset = validate_image(image)
+    _, _, _, _, _, _, _, data_start, _, _ = struct.unpack_from(SUPER_FMT, image, 0)
 
     for entry in entries:
         if entry["type"] != 0 and entry["parent"] == FS_ROOT and entry["name"] == file_name:
@@ -224,8 +277,8 @@ def install(disk_path: Path, source_path: Path, name: str | None = None) -> None
     start_sector = 0
     if needed:
         run_length = 0
-        run_start = DATA_START
-        for sector in range(DATA_START, total_sectors):
+        run_start = data_start
+        for sector in range(data_start, total_sectors):
             if not bitmap_used(bitmap, sector):
                 if run_length == 0:
                     run_start = sector
