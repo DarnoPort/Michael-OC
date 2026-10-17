@@ -25,6 +25,7 @@ SECTIONS
     {
         *(.rodata .rodata.*)
     } :text
+    _kernel_text_end = .;
 
     /* Keep writable data in a separate page-aligned RW segment. */
     . = ALIGN(0x1000);

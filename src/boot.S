@@ -38,7 +38,26 @@ _start:
     xor %ebp, %ebp
 
     /*
-     * Multiboot v1 enters with EAX=magic and EBX=info pointer.
+     * Multiboot leaves segment-selector values undefined and GDTR may be
+     * unusable. Preserve the boot arguments, install our flat GDT, then load
+     * the selectors used by the kernel's IDT (code=0x08, data=0x10).
+     */
+    pushl %eax
+    pushl %ebx
+    lgdt gdt_descriptor
+    ljmp $0x08, $gdt_flush
+
+gdt_flush:
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
+    movw %ax, %ss
+    popl %ebx
+    popl %eax
+
+    /*
      * Keep 16-byte call-site alignment for the compiled C kernel.
      * C uses cdecl: push arguments right-to-left.
      */
@@ -54,3 +73,15 @@ halt:
 .size _start, . - _start
 
 .section .note.GNU-stack,"",@progbits
+
+.section .rodata
+.align 8
+gdt_start:
+    .quad 0x0000000000000000
+    .quad 0x00CF9A000000FFFF
+    .quad 0x00CF92000000FFFF
+gdt_end:
+
+gdt_descriptor:
+    .word gdt_end - gdt_start - 1
+    .long gdt_start

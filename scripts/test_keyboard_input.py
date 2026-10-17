@@ -55,6 +55,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--qemu", required=True)
     parser.add_argument("--iso", required=True)
+    parser.add_argument("--disk", required=True)
     parser.add_argument("--work-dir", required=True)
     args = parser.parse_args()
 
@@ -72,6 +73,7 @@ def main() -> int:
         args.qemu,
         "-m", "128M",
         "-cdrom", args.iso,
+        "-hda", args.disk,
         "-display", "none",
         "-serial", f"file:{serial_log}",
         "-monitor", f"unix:{monitor_path},server,nowait",
@@ -82,7 +84,7 @@ def main() -> int:
     process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     monitor = None
     try:
-        wait_for_marker(serial_log, "MICHAEL_OC_KEYBOARD_POLL_OK", process, 10.0)
+        wait_for_marker(serial_log, "MICHAEL_OC_KEYBOARD_EVENT_LOOP_OK", process, 10.0)
 
         deadline = time.monotonic() + 5.0
         while not monitor_path.exists() and time.monotonic() < deadline:
@@ -104,7 +106,42 @@ def main() -> int:
         send_command(monitor, "sendkey esc")
         wait_for_marker(serial_log, "MICHAEL_OC_UI_SCREEN=HOME", process, 3.0)
 
-        print("PASS: QEMU key injection opened the keyboard page, delivered scan code 0x1E, and returned home with Escape.")
+        send_command(monitor, "sendkey 6")
+        wait_for_marker(serial_log, "MICHAEL_OC_UI_SCREEN=CONSOLE", process, 3.0)
+        send_command(monitor, "sendkey h")
+        send_command(monitor, "sendkey e")
+        send_command(monitor, "sendkey l")
+        send_command(monitor, "sendkey p")
+        send_command(monitor, "sendkey ret")
+        wait_for_marker(serial_log, "MICHAEL_OC_CONSOLE_COMMAND=help", process, 3.0)
+        wait_for_marker(serial_log, "MICHAEL_OC_CONSOLE_COMMANDS_OK", process, 3.0)
+
+        send_command(monitor, "sendkey m")
+        send_command(monitor, "sendkey e")
+        send_command(monitor, "sendkey m")
+        send_command(monitor, "sendkey ret")
+        wait_for_marker(serial_log, "MICHAEL_OC_CONSOLE_MEMORY_OK", process, 3.0)
+
+        send_command(monitor, "sendkey f")
+        send_command(monitor, "sendkey s")
+        send_command(monitor, "sendkey ret")
+        wait_for_marker(serial_log, "MICHAEL_OC_CONSOLE_FS_OK", process, 3.0)
+
+        send_command(monitor, "sendkey u")
+        send_command(monitor, "sendkey p")
+        send_command(monitor, "sendkey t")
+        send_command(monitor, "sendkey i")
+        send_command(monitor, "sendkey m")
+        send_command(monitor, "sendkey e")
+        send_command(monitor, "sendkey ret")
+        wait_for_marker(serial_log, "MICHAEL_OC_CONSOLE_UPTIME_OK", process, 3.0)
+
+        send_command(monitor, "sendkey up")
+        send_command(monitor, "sendkey end")
+        send_command(monitor, "sendkey esc")
+        wait_for_marker(serial_log, "MICHAEL_OC_UI_SCREEN=HOME", process, 3.0)
+
+        print("PASS: keyboard IRQ navigated the UI, executed console help/mem/fs/uptime commands, scrolled history, and exited home.")
         return 0
     except Exception as exc:
         print(f"FAIL: keyboard input test: {exc}", file=sys.stderr)
