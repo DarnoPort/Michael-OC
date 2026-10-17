@@ -112,11 +112,12 @@ def create_pending_journal_disk(create_script: Path, disk: Path, kind: str) -> N
             break
     if free_slot is None:
         raise RuntimeError("fresh disk has no directory entry for the recovery fixture")
-    struct.pack_into(
-        "<32sHBBIIH18s", directory_payload, free_slot * entry_size,
-        b"journal-recovered.txt".ljust(32, b"\x00"),
-        0xFFFF, 1, 0, 0, 0, 0, bytes(18),
-    )
+    if kind != "transaction":
+        struct.pack_into(
+            "<32sHBBIIH18s", directory_payload, free_slot * entry_size,
+            b"journal-recovered.txt".ljust(32, b"\x00"),
+            0xFFFF, 1, 0, 0, 0, 0, bytes(18),
+        )
 
     if kind in ("directory", "bad-checksum"):
         journal_kind, target_start, shadow_start = 1, directory_start, 18
@@ -131,6 +132,31 @@ def create_pending_journal_disk(create_script: Path, disk: Path, kind: str) -> N
         # Simulate an interrupted home write after the complete shadow was prepared.
         orphan_sector = data_start + 1
         image[bitmap_offset + (orphan_sector >> 3)] |= 1 << (orphan_sector & 7)
+    elif kind == "transaction":
+        # Commit a new directory entry and its allocation bit as one journal item.
+        total_sectors = header[2]
+        bitmap_offset = bitmap_start * 512
+        bitmap_payload = bytearray(
+            image[bitmap_offset:bitmap_offset + bitmap_sectors * 512]
+        )
+        free_sector = None
+        for sector in range(data_start, total_sectors):
+            if not (bitmap_payload[sector >> 3] & (1 << (sector & 7))):
+                free_sector = sector
+                break
+        if free_sector is None:
+            raise RuntimeError("transaction fixture has no free data sector")
+
+        struct.pack_into(
+            "<32sHBBIIH18s", directory_payload, free_slot * entry_size,
+            b"atomic-recovered.txt".ljust(32, b"\x00"),
+            0xFFFF, 1, 0, free_sector, 1, 1, bytes(18),
+        )
+        bitmap_payload[free_sector >> 3] |= 1 << (free_sector & 7)
+        image[free_sector * 512:(free_sector + 1) * 512] = b"T" + bytes(511)
+
+        journal_kind, target_start, shadow_start = 3, directory_start, 18
+        payload = bytes(directory_payload) + bytes(bitmap_payload)
     else:
         raise ValueError(f"unknown pending journal case: {kind}")
 
@@ -139,8 +165,9 @@ def create_pending_journal_disk(create_script: Path, disk: Path, kind: str) -> N
     checksum = journal_checksum(payload)
     if kind == "bad-checksum":
         image[payload_offset + 17] ^= 0x01
+    journal_sector_count = 16 if kind == "transaction" else 8
     journal_header = struct.pack(
-        "<IIIII", 0x314A4F4D, journal_kind, 8, checksum, target_start
+        "<IIIII", 0x314A4F4D, journal_kind, journal_sector_count, checksum, target_start
     ).ljust(512, b"\x00")
     image[17 * 512:18 * 512] = journal_header
     disk.write_bytes(image)
@@ -167,6 +194,19 @@ def verify_journal_recovery(disk: Path, kind: str) -> None:
         sector = header[7] + 1
         if home[sector >> 3] & (1 << (sector & 7)):
             raise RuntimeError("bitmap journal replay did not clear the simulated stray bit")
+    elif kind == "transaction":
+        directory_home = image[header[5] * 512:(header[5] + 8) * 512]
+        directory_shadow = image[18 * 512:26 * 512]
+        bitmap_home = image[header[3] * 512:(header[3] + 8) * 512]
+        bitmap_shadow = image[26 * 512:34 * 512]
+        if directory_home != directory_shadow or bitmap_home != bitmap_shadow:
+            raise RuntimeError("combined journal replay did not reproduce both metadata tables")
+        start, size, count, _ = find_root_file(disk, "atomic-recovered.txt")
+        if size != 1 or count != 1 or image[start * 512:start * 512 + 1] != b"T":
+            raise RuntimeError("combined journal replay lost the new file or its data")
+        sector = start
+        if not (bitmap_home[sector >> 3] & (1 << (sector & 7))):
+            raise RuntimeError("combined journal replay did not allocate the new file extent")
 
 
 def find_root_file(image_path: Path, wanted_name: str) -> tuple[int, int, int, int]:
@@ -271,7 +311,7 @@ def main() -> int:
     print("PASS: recovered filesystem remained valid and retained the new file after a cold reboot.")
 
     # Simulate a crash immediately after the journal commit record reached disk.
-    for kind in ("directory", "bitmap"):
+    for kind in ("directory", "bitmap", "transaction"):
         journal_disk = args.work_dir / f"pending-journal-{kind}.img"
         create_pending_journal_disk(args.create_disk_script, journal_disk, kind)
         journal_log = run_phase(
