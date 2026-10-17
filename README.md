@@ -15,7 +15,7 @@ Michael OC is an independent operating-system project targeting QEMU on Ubuntu L
 - Fresh virtual-disk image seeded with a runnable welcome.mapp demonstration.
 - Integration test targets for boot markers, keyboard input, exception dispatch, file-system persistence, and UI-driven script execution.
 
-**Michael OC is still an early-stage OS, not a completed general-purpose operating system.** The UI and MOCApp interpreter currently run in kernel context; applications do not have isolated address spaces or protected user mode. Paging/virtual memory, a system-call ABI, native ELF execution, process scheduling, timer and mouse drivers, and filesystem journaling remain unimplemented. The filesystem and interpreter are deliberately small and have documented limitations.
+**Michael OC is still an early-stage OS, not a completed general-purpose operating system.** The UI and MOCApp interpreter run in kernel context; applications do not have isolated address spaces or protected user mode. The current 4 KiB paging setup is a single supervisor-only identity map with protected kernel text, not per-process virtual memory. A stable syscall ABI, native ELF loader, and process scheduler are not implemented. PIT timer and PS/2 mouse support are basic; MOCFS1 still lacks journaling and crash recovery.
 
 ## Build requirements (Ubuntu)
 
@@ -47,17 +47,17 @@ Scripts are limited to 16 KiB and 256 source lines. MOCApp is interpreted by the
 
     make test
 
-The latest complete CI run, [38915742572](https://github.com/DarnoPort/Michael-OC/actions/runs/38915742572), passed ISO compilation, Multiboot validation, QEMU boot, keyboard navigation including the debug console, PS/2 mouse movement/click navigation, exception dispatch, CPU-enforced page protection, disk persistence/CRUD, editor and MOCApp execution, external app installation, and installer rejection/failure-atomicity checks.
+The `make test` suite builds and boots the ISO in QEMU, checks keyboard and mouse input, exception dispatch and CPU-enforced page protection, verifies disk persistence/CRUD over cold boots, exercises the editor and MOCApp runtime, and tests the host-side installer. GitHub Actions runs this suite on pushes and pull requests; see the repository's Actions page for the result of the current revision.
 
 ## Known limitations and next priorities
 
-- No paging, virtual address spaces, user-mode separation, or process scheduler.
-- The interpreter operates in kernel context and supports only its documented instructions.
-- MOCFS1 is a custom, fixed-table filesystem with contiguous file extents and no journal or crash recovery.
-- No mouse pointer or timer interrupt driver.
+- No per-process address spaces, ring-3 user mode, stable syscall ABI, native ELF loader, or process scheduler. Paging currently uses one global identity map, with kernel text protected from writes.
+- The interpreter operates in kernel context and supports only its documented instructions; it is not a security boundary.
+- MOCFS1 is a custom, fixed-table filesystem with contiguous file extents. Mount validation rejects malformed ownership metadata, but there is no journal or crash recovery.
+- PIT timer and PS/2 mouse support are rudimentary and do not provide preemptive scheduling.
 - The UI tools are kernel-resident screens rather than separate protected processes.
 
-Next priorities are tested paging and safe memory mappings, user-mode execution and a stable system-call ABI, filesystem consistency/recovery, and mouse/timer support. Only label a feature as verified when its corresponding test actually passes.
+Next priorities are stronger filesystem consistency and crash recovery, ring-3 execution with a stable syscall ABI, per-process memory spaces, and a process scheduler. Only label a feature as verified when its corresponding test actually passes.
 
 ## Installing an app created outside QEMU
 

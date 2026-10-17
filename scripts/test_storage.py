@@ -2,6 +2,7 @@
 """Two-cold-boot test for Michael OC disk persistence and filesystem operations."""
 from __future__ import annotations
 import argparse
+import struct
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +39,55 @@ def require(log: str, markers: tuple[str, ...], phase: str) -> None:
     failures = [line for line in log.splitlines() if "MICHAEL_OC_STORAGE_TEST_FAIL" in line]
     if failures:
         raise RuntimeError(f"{phase}: kernel reported failure: {failures}\n{log}")
+def create_corrupted_disk(create_script: Path, disk: Path, corruption: str) -> None:
+    subprocess.run(
+        [sys.executable, str(create_script), "--output", str(disk)],
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    image = bytearray(disk.read_bytes())
+    header = struct.unpack_from("<8sIIIIIIIII", image, 0)
+    bitmap_start = header[3]
+    directory_start = header[5]
+    data_start = header[7]
+    entry_count = header[8]
+    entry_size = header[9]
+
+    if corruption == "overlapping-extents":
+        for index in range(entry_count):
+            offset = directory_start * 512 + index * entry_size
+            entry = struct.unpack_from("<32sHBBIIH18s", image, offset)
+            if entry[2] == 0:
+                # Point a second file at welcome.mapp's existing data sector.
+                struct.pack_into(
+                    "<32sHBBIIH18s", image, offset,
+                    b"overlap.txt".ljust(32, b"\x00"),
+                    0xFFFF, 1, 0, data_start, 1, 1, bytes(18),
+                )
+                break
+        else:
+            raise RuntimeError("fresh image has no free directory entry")
+    elif corruption == "orphan-allocated-sector":
+        # Mark a free data sector allocated without giving it a directory owner.
+        sector = data_start + 1
+        byte_offset = bitmap_start * 512 + (sector >> 3)
+        image[byte_offset] |= 1 << (sector & 7)
+    else:
+        raise ValueError(f"unknown corruption case: {corruption}")
+
+    disk.write_bytes(image)
+
+
+def require_mount_rejected(log: str, corruption: str) -> None:
+    expected = "MICHAEL_OC_STORAGE_TEST_FAIL=MOUNT"
+    if expected not in log:
+        raise RuntimeError(
+            f"{corruption}: expected mount rejection marker {expected!r}\\nSerial log:\\n{log}"
+        )
+    if "MICHAEL_OC_STORAGE_FS_OK" in log:
+        raise RuntimeError(f"{corruption}: corrupt filesystem was reported mounted\\n{log}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--qemu", required=True)
@@ -54,6 +104,17 @@ def main() -> int:
     verify_log = run_phase(args.qemu, args.iso, args.disk, args.work_dir / "storage-verify.log")
     require(verify_log, ("MICHAEL_OC_BOOT_OK", "MICHAEL_OC_STORAGE_FS_OK", VERIFY_MARKER, CRUD_MARKER), "second boot")
     print("PASS: second cold QEMU boot recovered persisted bytes and passed filesystem CRUD checks.")
+
+    for corruption in ("overlapping-extents", "orphan-allocated-sector"):
+        corrupt_disk = args.work_dir / f"corrupt-{corruption}.img"
+        create_corrupted_disk(args.create_disk_script, corrupt_disk, corruption)
+        corrupt_log = run_phase(
+            args.qemu, args.iso, corrupt_disk,
+            args.work_dir / f"corrupt-{corruption}.log",
+        )
+        require_mount_rejected(corrupt_log, corruption)
+        print(f"PASS: MOCFS1 mount rejected {corruption} metadata.")
+
     return 0
 if __name__ == "__main__":
     try:
