@@ -717,7 +717,7 @@ static char ui_scancode_to_ascii(u8 scancode)
     case 0x26: return 'l'; case 0x2C: return 'z'; case 0x2D: return 'x';
     case 0x2E: return 'c'; case 0x2F: return 'v'; case 0x30: return 'b';
     case 0x31: return 'n'; case 0x32: return 'm'; case 0x33: return ',';
-    case 0x34: return '.'; case 0x39: return ' ';
+    case 0x34: return '.'; case 0x35: return '/'; case 0x39: return ' ';
     default: return '\0';
     }
 }
@@ -1452,17 +1452,65 @@ static void ui_finish_file_dialog(void)
             return;
         }
 
+        /*
+         * A plain name copies into this directory. DIR/NAME targets an immediate
+         * child directory, while PARENT/NAME targets the current directory's parent.
+         */
+        u16 destination_parent = ui_current_directory();
         char new_name[32];
-        ui_copy_text(new_name, sizeof(new_name), ui_file_dialog_buffer);
+        char *separator = 0;
+        for (u32 i = 0u; i < ui_file_dialog_length; ++i) {
+            if (ui_file_dialog_buffer[i] == '/') {
+                if (separator != 0) {
+                    ui_set_message("USE ONE DIRECTORY LEVEL");
+                    return;
+                }
+                separator = &ui_file_dialog_buffer[i];
+            }
+        }
+
+        if (separator != 0) {
+            *separator = '\0';
+            if (ui_file_dialog_buffer[0] == '\0' || separator[1] == '\0') {
+                ui_set_message("COPY PATH NEEDS DIR AND NAME");
+                return;
+            }
+
+            int move_to_parent = ui_text_length(ui_file_dialog_buffer) == 6u;
+            const char parent_word[] = "parent";
+            for (u32 i = 0u; i < 6u && move_to_parent; ++i) {
+                char ch = ui_file_dialog_buffer[i];
+                if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+                if (ch != parent_word[i]) move_to_parent = 0;
+            }
+
+            if (move_to_parent) {
+                if (ui_directory_depth == 0u) {
+                    ui_set_message("ALREADY AT ROOT");
+                    return;
+                }
+                destination_parent = ui_directory_depth == 1u ?
+                    FS_ROOT : ui_directory_stack[ui_directory_depth - 2u];
+            } else if (!fs_lookup(ui_current_directory(),
+                                  ui_file_dialog_buffer, &destination_parent)) {
+                ui_set_message("COPY DIRECTORY NOT FOUND");
+                return;
+            }
+            ui_copy_text(new_name, sizeof(new_name), separator + 1u);
+        } else {
+            ui_copy_text(new_name, sizeof(new_name), ui_file_dialog_buffer);
+        }
+
         u16 copied_index = 0u;
-        if (!fs_copy_file(source_index, ui_current_directory(), new_name, &copied_index)) {
-            ui_set_message("COPY FAILED: CHECK NAME OR DISK");
+        if (!fs_copy_file(source_index, destination_parent, new_name, &copied_index)) {
+            ui_set_message("COPY FAILED: CHECK TARGET NAME OR DISK");
             return;
         }
 
-        ui_set_message("FILE COPIED");
+        const int copied_here = destination_parent == ui_current_directory();
+        ui_set_message(copied_here ? "FILE COPIED" : "FILE COPIED TO DIRECTORY");
         ui_refresh_file_list();
-        ui_select_name(new_name);
+        if (copied_here) ui_select_name(new_name);
         serial_write("MICHAEL_OC_FILE_COPIED=");
         serial_write(new_name);
         serial_write("\r\n");
