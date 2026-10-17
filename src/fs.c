@@ -324,10 +324,11 @@ static int validate_directory(void)
     }
 
     /*
-     * The expected map is now derived from reserved structures and validated
+     * The expected map is derived from reserved structures and validated
      * file extents. Repair stale/orphan bits, missing allocation bits, and
-     * out-of-range bits. This recovers common interrupted bitmap updates.
-     * It is not a journal and cannot repair arbitrary torn directory records.
+     * out-of-range bits. In v2, committed directory/bitmap transactions are
+     * replayed before this check; this repair remains useful for interrupted
+     * multi-step operations and legacy v1 images.
      */
     int bitmap_differs = 0;
     for (u32 i = 0u; i < FS_BITMAP_BYTES; ++i) {
