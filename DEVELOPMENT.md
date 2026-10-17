@@ -24,14 +24,14 @@
 | PS/2 keyboard IRQ1 | Verified | Latest QEMU keyboard test exercises key delivery, navigation, and the debug console |
 | Physical page allocator | Verified | RAM-map parsing and allocation/free self-test; paging now also enabled |
 | ATA PIO disk driver | Verified | QEMU persistence and filesystem integration tests use the primary-master IDE device |
-| MOCFS1 persistent filesystem | Verified baseline; v2 journal pending verification | v2 uses a checksummed redo record with separate shadow areas for the directory table and bitmap; v1 mount/write compatibility and crash replay checks are added to the current branch |
+| MOCFS1 persistent filesystem | Metadata journal verified; copy-on-write pending verification | CI run [38992513404](https://github.com/DarnoPort/Michael-OC/actions/runs/38992513404) passed v2 replay/corruption tests and v1 mount/write; this branch changes existing-file writes to copy-on-write |
 | File manager and text editor | Verified | Directory scrolling, file/directory move, same-directory copy and copy into a child directory pass the QEMU keyboard integration workflow; see [PR #7 CI](https://github.com/DarnoPort/Michael-OC/actions/runs/38991949249) |
 | MOCApp on-disk interpreter | Verified by integration test | Latest CI exercised PRINT, WAITKEY, IFKEY/JUMP, SET/ADD/PRINTNUM and filesystem LS/READ/WRITE |
 | MOCApp file-manager workflow | Verified by integration test | Disk-resident script launch and exit path passed QEMU app test; host installer has separate checks |
 | Paging and virtual memory | Partial, verified | 4 KiB global supervisor identity map, absent null page, CR0.WP and read-only kernel text; no per-process address spaces |
 | Userspace isolation, syscall ABI, native ELF loader | Not implemented | UI and script interpreter run in kernel context; no protected user processes |
 | PIT timer and PS/2 mouse | Verified foundation | PIT IRQ0 at about 100 Hz; PS/2 IRQ12 movement/button and mouse-driven menu navigation passed QEMU test |
-| Filesystem journaling/recovery | Implemented, pending verification | v2 has checksummed replay for directory/bitmap metadata; current CI changes exercise both transaction types, corrupted checksum rejection, and v1 compatibility; file contents are not journaled |
+| Filesystem journaling/recovery | Metadata replay verified; file replacement pending verification | v2 replays committed directory/bitmap metadata; this branch writes file replacements to a fresh extent before switching the visible directory entry |
 
 ## Source layout
 
@@ -45,7 +45,7 @@
 - scripts/create_disk_image.py — creates MOCFS1 v2 journaled images by default (or v1 fixtures via `--version 1`) and seeds welcome.mapp.
 - scripts/test_keyboard_input.py — QEMU keyboard injection, console commands, and scrolling/opening files in a 21-entry directory.
 - scripts/test_exceptions.py — dedicated exception test kernel.
-- scripts/test_storage.py — persistence/CRUD and move/copy checks, multi-sector data validation, pending-journal replay/corruption tests, orphan-bitmap repair, overlapping-extents rejection, and v1 compatibility.
+- scripts/test_storage.py — persistence/CRUD and move/copy checks, multi-sector data validation, copy-on-write replacement/reboot persistence, pending-journal replay/corruption tests, orphan-bitmap repair, overlapping-extents rejection, and v1 compatibility.
 - scripts/test_apps.py — editor persistence and MOCApp integration workflow.
 - docs/MOCAPP.md — script format and developer/user guide.
 - Makefile and .github/workflows/build.yml — reproducible build and CI.
@@ -72,7 +72,7 @@ The latest successful baseline run for the merged file-manager copy-destination 
 
 ## Next tasks
 
-1. Add recoverable writes for file contents, especially interrupted in-place writes; the current journal only covers bitmap and directory metadata.
+1. Make multi-step operations atomic across bitmap and directory commits; the current journal protects each table update independently.
 2. Make logically coupled bitmap/directory changes a single recoverable transaction or specify ordering/recovery invariants for each operation.
 3. Revisit the fixed 64-entry directory table and contiguous extents; fragmentation can exhaust contiguous space before the disk is full.
 4. Add a ring-3 execution path with a TSS, explicit syscall ABI, and a strict user/kernel boundary.

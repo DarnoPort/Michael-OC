@@ -484,66 +484,67 @@ int fs_write_file(u16 index, const u8 *buffer, u32 size)
     if (!mounted || index >= FS_DIRECTORY_LIMIT || directory[index].type != FS_ENTRY_FILE ||
         (size != 0u && buffer == 0) ||
         size > (mounted_total_sectors - mounted_data_start) * FS_SECTOR_SIZE) return 0;
+
     const u32 needed = (size + FS_SECTOR_SIZE - 1u) / FS_SECTOR_SIZE;
     const u32 old_start = directory[index].start_sector;
     const u32 old_count = directory[index].sector_count;
     const u32 old_size = directory[index].size_bytes;
-    if (needed <= old_count) {
+    u32 new_start = 0u;
+
+    /*
+     * Copy-on-write: never overwrite sectors still referenced by the visible
+     * directory entry. Reserve and fill a different extent first, then publish
+     * the new extent through the journaled directory table.
+     */
+    if (needed != 0u) {
+        if (!allocate_contiguous(needed, &new_start)) return 0;
+        mark_extent(new_start, needed, 1);
+        if (!persist_bitmap()) {
+            mark_extent(new_start, needed, 0);
+            return 0;
+        }
+
         u32 copied = 0u;
-        for (u32 i = 0u; i < needed; ++i) {
-            for (u32 b = 0u; b < FS_SECTOR_SIZE; ++b) {
-                const u32 pos = copied + b;
-                io_buffer[b] = pos < size ? buffer[pos] : 0u;
+        for (u32 sector = 0u; sector < needed; ++sector) {
+            for (u32 byte = 0u; byte < FS_SECTOR_SIZE; ++byte) {
+                const u32 position = copied + byte;
+                io_buffer[byte] = position < size ? buffer[position] : 0u;
             }
-            if (!ata_write_sector(old_start + i, io_buffer)) return 0;
+            if (!ata_write_sector(new_start + sector, io_buffer)) {
+                mark_extent(new_start, needed, 0);
+                if (!persist_bitmap()) mark_extent(new_start, needed, 1);
+                return 0;
+            }
             copied += FS_SECTOR_SIZE;
         }
-        directory[index].size_bytes = size;
-        directory[index].sector_count = (u16)needed;
-        directory[index].start_sector = needed == 0u ? 0u : old_start;
-        if (!persist_directory()) {
-            directory[index].size_bytes = old_size;
-            directory[index].sector_count = (u16)old_count;
-            directory[index].start_sector = old_start;
-            return 0;
-        }
-        if (needed < old_count) {
-            mark_extent(old_start + needed, old_count - needed, 0);
-            if (!persist_bitmap()) return 0;
-        }
-        return 1;
     }
-    u32 new_start;
-    if (!allocate_contiguous(needed, &new_start)) return 0;
-    mark_extent(new_start, needed, 1);
-    if (!persist_bitmap()) { mark_extent(new_start, needed, 0); return 0; }
-    u32 copied = 0u;
-    for (u32 i = 0u; i < needed; ++i) {
-        for (u32 b = 0u; b < FS_SECTOR_SIZE; ++b) {
-            const u32 pos = copied + b;
-            io_buffer[b] = pos < size ? buffer[pos] : 0u;
-        }
-        if (!ata_write_sector(new_start + i, io_buffer)) {
-            mark_extent(new_start, needed, 0);
-            (void)persist_bitmap();
-            return 0;
-        }
-        copied += FS_SECTOR_SIZE;
-    }
-    directory[index].start_sector = new_start;
+
+    /* The journaled directory update is the commit point for the new contents. */
+    directory[index].start_sector = needed == 0u ? 0u : new_start;
     directory[index].size_bytes = size;
     directory[index].sector_count = (u16)needed;
     if (!persist_directory()) {
         directory[index].start_sector = old_start;
         directory[index].size_bytes = old_size;
         directory[index].sector_count = (u16)old_count;
-        mark_extent(new_start, needed, 0);
-        (void)persist_bitmap();
+        if (needed != 0u) {
+            mark_extent(new_start, needed, 0);
+            if (!persist_bitmap()) mark_extent(new_start, needed, 1);
+        }
         return 0;
     }
+
+    /*
+     * Old sectors are released after the new entry has committed. A failed
+     * bitmap update only leaks reserved sectors temporarily: mount reconstructs
+     * ownership from the committed directory table and repairs the bitmap.
+     */
     if (old_count != 0u) {
         mark_extent(old_start, old_count, 0);
-        if (!persist_bitmap()) return 0;
+        if (!persist_bitmap()) {
+            mark_extent(old_start, old_count, 1);
+            return 1; /* The replacement is already committed. */
+        }
     }
     return 1;
 }

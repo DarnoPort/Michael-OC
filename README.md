@@ -15,7 +15,7 @@ Michael OC is an independent operating-system project targeting QEMU on Ubuntu L
 - Fresh virtual-disk image seeded with a runnable welcome.mapp demonstration.
 - Integration test targets for boot markers, keyboard input, exception dispatch, file-system persistence, and UI-driven script execution.
 
-**Michael OC is still an early-stage OS, not a completed general-purpose operating system.** The UI and MOCApp interpreter run in kernel context; applications do not have isolated address spaces or protected user mode. The current 4 KiB paging setup is a single supervisor-only identity map with protected kernel text, not per-process virtual memory. A stable syscall ABI, native ELF loader, and process scheduler are not implemented. PIT timer and PS/2 mouse support are basic. MOCFS1 v2 journals directory and bitmap metadata, but data-sector writes and operations spanning multiple independent metadata transactions are not fully atomic; v1 images remain unjournaled.
+**Michael OC is still an early-stage OS, not a completed general-purpose operating system.** The UI and MOCApp interpreter run in kernel context; applications do not have isolated address spaces or protected user mode. The current 4 KiB paging setup is a single supervisor-only identity map with protected kernel text, not per-process virtual memory. A stable syscall ABI, native ELF loader, and process scheduler are not implemented. PIT timer and PS/2 mouse support are basic. MOCFS1 v2 journals metadata and replaces files by writing a fresh extent before switching the directory entry. Multi-step operations are not a single atomic transaction, and legacy v1 images remain unjournaled.
 
 ## Build requirements (Ubuntu)
 
@@ -53,11 +53,11 @@ The `make test` suite builds and boots the ISO in QEMU, checks keyboard and mous
 
 - No per-process address spaces, ring-3 user mode, stable syscall ABI, native ELF loader, or process scheduler. Paging currently uses one global identity map, with kernel text protected from writes.
 - The interpreter operates in kernel context and supports only its documented instructions; it is not a security boundary.
-- MOCFS1 is a custom, fixed-table filesystem with contiguous file extents. Format v2 reserves sectors 17–33 for a checksummed write-ahead journal plus directory/bitmap shadow copies, and replays a committed metadata transaction on mount before loading the tables. Legacy v1 images keep their original data start at sector 17 and remain supported, but have no journal. The v2 journal protects each complete directory-table or bitmap update; it does not make a sequence of separate metadata updates or in-place file-data writes one atomic transaction.
+- MOCFS1 is a custom, fixed-table filesystem with contiguous file extents. Format v2 reserves sectors 17–33 for a checksummed write-ahead journal plus directory/bitmap shadow copies, and replays a committed metadata transaction on mount before loading the tables. Legacy v1 images keep their original data start at sector 17 and remain supported, but have no journal. File replacement uses copy-on-write: new sectors are written before the directory entry is switched, and old sectors are released afterward. The v2 journal protects each complete directory-table or bitmap update; separate bitmap/directory updates are still independent transactions.
 - PIT timer and PS/2 mouse support are rudimentary and do not provide preemptive scheduling.
 - The UI tools are kernel-resident screens rather than separate protected processes.
 
-Next priorities are crash consistency for file contents and operations that span multiple metadata transactions, scalable directory/allocation structures, ring-3 execution with a stable syscall ABI, per-process memory spaces, and a process scheduler. Only label a feature as verified when its corresponding test actually passes.
+Next priorities are atomic operations spanning multiple metadata updates, scalable directory/allocation structures, ring-3 execution with a stable syscall ABI, per-process memory spaces, and a process scheduler. Only label a feature as verified when its corresponding test actually passes.
 
 ## Installing an app created outside QEMU
 
