@@ -2276,12 +2276,38 @@ static void storage_test_fail(const char *reason)
     serial_write("\r\n");
     halt_forever();
 }
+static int storage_test_name_equal(const char *left, const char *right)
+{
+    for (u32 i = 0u; i < 32u; ++i) {
+        if (left[i] != right[i]) return 0;
+        if (left[i] == '\0') return 1;
+    }
+    return 0;
+}
+
+static u32 storage_test_file_start(const char *name)
+{
+    fs_entry_t entries[FS_DIRECTORY_LIMIT];
+    u32 count = 0u;
+    if (!fs_list(FS_ROOT, entries, FS_DIRECTORY_LIMIT, &count))
+        storage_test_fail("COW_ROOT_LIST");
+    for (u32 i = 0u; i < count; ++i) {
+        if (entries[i].type == FS_ENTRY_FILE &&
+            storage_test_name_equal(entries[i].name, name))
+            return entries[i].start_sector;
+    }
+    storage_test_fail("COW_ENTRY_NOT_FOUND");
+}
+
 static void storage_self_test(void) __attribute__((noreturn));
 static void storage_self_test(void)
 {
     static const u8 persistent_payload[] =
         "Michael OC disk persistence survives a cold QEMU restart.";
     static const u8 crud_payload[] = "file read/write/rename/delete";
+    static const u8 cow_initial_payload[] = "old contents must stay intact";
+    static const u8 cow_replacement_payload[] =
+        "replacement bytes appear after the directory commit.";
     u8 verify[128];
     u32 size = 0u;
     u16 file_index = 0u;
@@ -2338,8 +2364,17 @@ static void storage_self_test(void)
             size != sizeof(crud_payload) ||
             !kernel_bytes_equal(verify, crud_payload, (u32)sizeof(crud_payload)))
             storage_test_fail("COPY_PERSISTENCE_VERIFY");
+
+        u16 cow_index = 0u;
+        if (!fs_lookup(FS_ROOT, "ci-cow.txt", &cow_index) ||
+            !fs_read_file(cow_index, verify, sizeof(verify), &size) ||
+            size != sizeof(cow_replacement_payload) ||
+            !kernel_bytes_equal(verify, cow_replacement_payload,
+                                (u32)sizeof(cow_replacement_payload)))
+            storage_test_fail("COW_PERSISTENCE_VERIFY");
         serial_write("MICHAEL_OC_STORAGE_MOVE_PERSIST_OK\r\n");
         serial_write("MICHAEL_OC_STORAGE_COPY_PERSIST_OK\r\n");
+        serial_write("MICHAEL_OC_STORAGE_COW_PERSIST_OK\r\n");
         halt_forever();
     }
 
@@ -2440,9 +2475,33 @@ static void storage_self_test(void)
     if (!fs_delete(folder_index))
         storage_test_fail("DELETE_EMPTY_DIRECTORY");
 
+    /*
+     * Existing-file replacement allocates a fresh extent before the journaled
+     * directory entry switches to it.
+     */
+    u16 cow_index = 0u;
+    if (!fs_create_file(FS_ROOT, "ci-cow.txt", &cow_index) ||
+        !fs_write_file(cow_index, cow_initial_payload,
+                       (u32)sizeof(cow_initial_payload)))
+        storage_test_fail("COW_INITIAL_WRITE");
+    const u32 first_extent = storage_test_file_start("ci-cow.txt");
+    if (!fs_write_file(cow_index, cow_replacement_payload,
+                       (u32)sizeof(cow_replacement_payload)))
+        storage_test_fail("COW_REPLACEMENT_WRITE");
+    const u32 replacement_extent = storage_test_file_start("ci-cow.txt");
+    if (first_extent == 0u || replacement_extent == 0u ||
+        first_extent == replacement_extent)
+        storage_test_fail("COW_REUSED_OLD_EXTENT");
+    if (!fs_read_file(cow_index, verify, sizeof(verify), &size) ||
+        size != sizeof(cow_replacement_payload) ||
+        !kernel_bytes_equal(verify, cow_replacement_payload,
+                            (u32)sizeof(cow_replacement_payload)))
+        storage_test_fail("COW_REPLACEMENT_CONTENT");
+
     serial_write("MICHAEL_OC_STORAGE_CRUD_OK\r\n");
     serial_write("MICHAEL_OC_STORAGE_MOVE_OK\r\n");
     serial_write("MICHAEL_OC_STORAGE_COPY_OK\r\n");
+    serial_write("MICHAEL_OC_STORAGE_COW_WRITE_OK\r\n");
     halt_forever();
 }
 
