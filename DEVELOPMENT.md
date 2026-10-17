@@ -24,8 +24,8 @@
 | PS/2 keyboard IRQ1 | Verified | Latest QEMU keyboard test exercises key delivery, navigation, and the debug console |
 | Physical page allocator | Verified | RAM-map parsing and allocation/free self-test; paging now also enabled |
 | ATA PIO disk driver | Verified | QEMU persistence and filesystem integration tests use the primary-master IDE device |
-| MOCFS1 persistent filesystem | Copy extension pending verification | File copy reserves a fresh extent and persists data/metadata; tests cover duplicate names, multi-sector byte equality, and cold-boot persistence. Journaling remains unimplemented |
-| File manager and text editor | Copy extension pending verification | Adds C to copy a selected file under a new name in the current directory; keyboard QEMU test exercises the copy dialog |
+| MOCFS1 persistent filesystem | Verified | Cross-directory file copy reserves a new extent, preserves bytes, clears EOF padding, rejects duplicate names, and survives cold reboot; CI run [38991724225](https://github.com/DarnoPort/Michael-OC/actions/runs/38991724225) passed |
+| File manager and text editor | Copy-to-directory UI extension pending verification | Copy dialog accepts a name in the current directory, `CHILD/name` for a direct child, or `PARENT/name` for the parent; keyboard QEMU test covers same- and child-directory copies |
 | MOCApp on-disk interpreter | Verified by integration test | Latest CI exercised PRINT, WAITKEY, IFKEY/JUMP, SET/ADD/PRINTNUM and filesystem LS/READ/WRITE |
 | MOCApp file-manager workflow | Verified by integration test | Disk-resident script launch and exit path passed QEMU app test; host installer has separate checks |
 | Paging and virtual memory | Partial, verified | 4 KiB global supervisor identity map, absent null page, CR0.WP and read-only kernel text; no per-process address spaces |
@@ -73,7 +73,7 @@ The latest successful pull-request workflow, [38988825037](https://github.com/Da
 ## Next tasks
 
 1. Improve crash consistency for metadata and data updates, using a recoverable commit protocol or journaling.
-2. Add copy-to-another-directory navigation; the copy API accepts any destination directory, while the current UI creates copies in the current directory.
+2. Extend copy destination paths to sibling and multi-level directories; current UI supports the current directory, one child level, or the parent.
 3. Revisit fixed directory capacity and contiguous extents; fragmentation can exhaust contiguous free space before total free space is exhausted.
 3. Add a ring-3 execution path with a TSS, explicit syscall ABI, and a strict user/kernel boundary.
 4. Introduce per-process page tables and safe page reclamation before loading native executable images.

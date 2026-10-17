@@ -236,7 +236,24 @@ def main() -> int:
         send_command(monitor, "sendkey ret")
         wait_for_marker(serial_log, "MICHAEL_OC_FILE_COPIED=welcomecopy", process, 3.0)
 
-        print("PASS: keyboard IRQ navigated the UI, scrolled a 21-entry directory, and copied a disk app from the file manager.")
+        # Create a child directory, then copy another instance into it via DIR/NAME.
+        send_command(monitor, "sendkey d")
+        wait_for_marker(serial_log, "MICHAEL_OC_FILE_DIALOG=NEW_DIRECTORY", process, 3.0)
+        for character in "copydir":
+            send_command(monitor, f"sendkey {character}")
+        send_command(monitor, "sendkey ret")
+        wait_for_marker(serial_log, "MICHAEL_OC_DIRECTORY_CREATED", process, 3.0)
+        for _ in range(22):
+            send_command(monitor, "sendkey up")
+        send_command(monitor, "sendkey c")
+        wait_for_marker(serial_log, "MICHAEL_OC_FILE_DIALOG=COPY_FILE", process, 3.0)
+        for character in "copydir/welcomecopy2":
+            key = "slash" if character == "/" else character
+            send_command(monitor, f"sendkey {key}")
+        send_command(monitor, "sendkey ret")
+        wait_for_marker(serial_log, "MICHAEL_OC_FILE_COPIED=welcomecopy2", process, 3.0)
+
+        print("PASS: keyboard IRQ navigated and scrolled the file manager, copied a file in-place, and copied another into a child directory.")
         return 0
     except Exception as exc:
         print(f"FAIL: keyboard input test: {exc}", file=sys.stderr)
