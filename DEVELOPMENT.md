@@ -24,7 +24,7 @@
 | PS/2 keyboard IRQ1 | Verified | Latest QEMU keyboard test exercises key delivery, navigation, and the debug console |
 | Physical page allocator | Verified | RAM-map parsing and allocation/free self-test; paging now also enabled |
 | ATA PIO disk driver | Verified | QEMU persistence and filesystem integration tests use the primary-master IDE device |
-| MOCFS1 persistent filesystem | Metadata journal verified; copy-on-write pending verification | CI run [38992513404](https://github.com/DarnoPort/Michael-OC/actions/runs/38992513404) passed v2 replay/corruption tests and v1 mount/write; this branch changes existing-file writes to copy-on-write |
+| MOCFS1 persistent filesystem | Existing filesystem checks documented; combined directory+bitmap journal transaction implemented, pending CI | This branch commits file replacement, file copy, and deletion through a single checksummed journal record covering both metadata tables; transaction replay has a new QEMU recovery fixture |
 | File manager and text editor | Verified | Directory scrolling, file/directory move, same-directory copy and copy into a child directory pass the QEMU keyboard integration workflow; see [PR #7 CI](https://github.com/DarnoPort/Michael-OC/actions/runs/38991949249) |
 | MOCApp on-disk interpreter | Verified by integration test | Latest CI exercised PRINT, WAITKEY, IFKEY/JUMP, SET/ADD/PRINTNUM and filesystem LS/READ/WRITE |
 | MOCApp file-manager workflow | Verified by integration test | Disk-resident script launch and exit path passed QEMU app test; host installer has separate checks |
@@ -45,7 +45,7 @@
 - scripts/create_disk_image.py — creates MOCFS1 v2 journaled images by default (or v1 fixtures via `--version 1`) and seeds welcome.mapp.
 - scripts/test_keyboard_input.py — QEMU keyboard injection, console commands, and scrolling/opening files in a 21-entry directory.
 - scripts/test_exceptions.py — dedicated exception test kernel.
-- scripts/test_storage.py — persistence/CRUD and move/copy checks, multi-sector data validation, copy-on-write replacement/reboot persistence, pending-journal replay/corruption tests, orphan-bitmap repair, overlapping-extents rejection, and v1 compatibility.
+- scripts/test_storage.py — persistence/CRUD and move/copy checks, multi-sector data validation, copy-on-write replacement/reboot persistence, single-table and combined pending-journal replay/corruption tests, orphan-bitmap repair, overlapping-extents rejection, and v1 compatibility.
 - scripts/test_apps.py — editor persistence and MOCApp integration workflow.
 - docs/MOCAPP.md — script format and developer/user guide.
 - Makefile and .github/workflows/build.yml — reproducible build and CI.
@@ -68,12 +68,12 @@ The ISO is build/michael-oc.iso. Persistent user files are stored in build/micha
 
 ## Latest CI status
 
-The latest successful baseline run for the merged file-manager copy-destination workflow is [38991949249](https://github.com/DarnoPort/Michael-OC/actions/runs/38991949249). The current journal branch extends that test suite with v2 metadata-replay and corruption cases plus v1 compatibility; these new checks remain pending their own CI result.
+The last recorded successful baseline run for the merged file-manager copy-destination workflow is [38991949249](https://github.com/DarnoPort/Michael-OC/actions/runs/38991949249). This branch adds a combined directory+bitmap journal transaction and a cold-boot replay fixture; do not label that change verified until the pull-request workflow passes.
 
 ## Next tasks
 
-1. Make multi-step operations atomic across bitmap and directory commits; the current journal protects each table update independently.
-2. Make logically coupled bitmap/directory changes a single recoverable transaction or specify ordering/recovery invariants for each operation.
+1. Add crash/fault injection around every write boundary of combined metadata transactions and verify old-or-new table consistency.
+2. Audit remaining filesystem operations for explicit crash-ordering invariants, especially legacy v1 behavior and mount-time bitmap repair.
 3. Revisit the fixed 64-entry directory table and contiguous extents; fragmentation can exhaust contiguous space before the disk is full.
 4. Add a ring-3 execution path with a TSS, explicit syscall ABI, and a strict user/kernel boundary.
 5. Introduce per-process page tables and safe page reclamation before loading native executable images.
