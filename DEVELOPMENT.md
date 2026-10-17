@@ -25,7 +25,7 @@
 | Physical page allocator | Verified | RAM-map parsing and allocation/free self-test; paging now also enabled |
 | ATA PIO disk driver | Verified | QEMU persistence and filesystem integration tests use the primary-master IDE device |
 | MOCFS1 persistent filesystem | Modified, pending verification | This change rebuilds the bitmap from validated extents, repairs orphan/missing bits, and retains rejection of overlapping extents; journaling remains unimplemented |
-| File manager and text editor | Verified | Latest CI passed file-manager/editor writes and reopened persisted content after reboot |
+| File manager and text editor | Scroll extension pending verification | Existing CRUD/editor paths are verified; this change adds a 21-entry QEMU navigation test to exercise selection beyond the first 12 visible rows |
 | MOCApp on-disk interpreter | Verified by integration test | Latest CI exercised PRINT, WAITKEY, IFKEY/JUMP, SET/ADD/PRINTNUM and filesystem LS/READ/WRITE |
 | MOCApp file-manager workflow | Verified by integration test | Disk-resident script launch and exit path passed QEMU app test; host installer has separate checks |
 | Paging and virtual memory | Partial, verified | 4 KiB global supervisor identity map, absent null page, CR0.WP and read-only kernel text; no per-process address spaces |
@@ -43,7 +43,7 @@
 - src/interrupts.c, src/interrupts.h, and src/isr_stubs.S — exceptions, PIC routing, and keyboard IRQ queue.
 - src/kernel.c — one-bit UI, file manager/editor, MOCApp parser and interpreter.
 - scripts/create_disk_image.py — creates a fresh MOCFS1 image and seeds welcome.mapp.
-- scripts/test_keyboard_input.py — QEMU keyboard injection.
+- scripts/test_keyboard_input.py — QEMU keyboard injection, console commands, and scrolling/opening files in a 21-entry directory.
 - scripts/test_exceptions.py — dedicated exception test kernel.
 - scripts/test_storage.py — persistence/CRUD over two cold boots, plus rejection tests for overlapping extents and orphan bitmap allocations.
 - scripts/test_apps.py — editor persistence and MOCApp integration workflow.

@@ -192,7 +192,7 @@ test: $(ISO) $(DISK_IMAGE)
 	done; \
 	echo "PASS: kernel boot, 1-bit canvas, UI input logic, framebuffer output, and keyboard IRQ startup."
 
-	python3 scripts/test_keyboard_input.py --qemu $(QEMU) --iso $(ISO) --disk $(DISK_IMAGE) --work-dir $(BUILD_DIR)
+	python3 scripts/test_keyboard_input.py --qemu $(QEMU) --iso $(ISO) --disk $(DISK_IMAGE) --work-dir $(BUILD_DIR) --create-disk-script scripts/create_disk_image.py
 	$(MAKE) test-mouse
 	$(MAKE) test-exception
 	$(MAKE) test-paging-fault
