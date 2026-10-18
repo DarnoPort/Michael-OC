@@ -66,7 +66,9 @@ static u8 ui_mouse_buttons;
 static u8 ui_cursor_background[14][7];
 static u32 ui_cursor_saved_x, ui_cursor_saved_y;
 static int ui_cursor_background_valid;
-static u32 ui_mouse_diagnostic_tick, ui_mouse_last_click_tick;
+static u32 ui_mouse_diagnostic_x, ui_mouse_diagnostic_y;
+static u32 ui_mouse_last_click_tick;
+static int ui_mouse_diagnostic_started;
 static u32 ui_mouse_last_click_index = FS_DIRECTORY_LIMIT;
 static int ui_mouse_file_click_valid;
 
@@ -2225,14 +2227,23 @@ static int ui_handle_mouse_event(const mouse_event_t *event)
     ui_mouse_y = next_y < 0 ? 0u : (next_y >= (int)canvas_height ? canvas_height - 1u : (u32)next_y);
     const int clicked = (event->buttons & 0x01u) != 0u && (ui_mouse_buttons & 0x01u) == 0u;
     ui_mouse_buttons = event->buttons;
-    const u32 now = timer_ticks();
-    /* Rate-limit UART diagnostics; cursor movement itself is never throttled. */
-    if (now != ui_mouse_diagnostic_tick) {
-        ui_mouse_diagnostic_tick = now;
-        serial_write("MICHAEL_OC_MOUSE_EVENT\r\n");
+    /*
+     * Cursor updates are never throttled. Emit serial telemetry for the first
+     * event and then every four pixels of movement, avoiding a UART write for
+     * each PS/2 packet while keeping QEMU's position test responsive.
+     */
+    const u32 diagnostic_dx = ui_mouse_x > ui_mouse_diagnostic_x ?
+        ui_mouse_x - ui_mouse_diagnostic_x : ui_mouse_diagnostic_x - ui_mouse_x;
+    const u32 diagnostic_dy = ui_mouse_y > ui_mouse_diagnostic_y ?
+        ui_mouse_y - ui_mouse_diagnostic_y : ui_mouse_diagnostic_y - ui_mouse_y;
+    if (!ui_mouse_diagnostic_started || diagnostic_dx >= 4u || diagnostic_dy >= 4u) {
+        ui_mouse_diagnostic_started = 1;
+        ui_mouse_diagnostic_x = ui_mouse_x;
+        ui_mouse_diagnostic_y = ui_mouse_y;
+        serial_write("MICHAEL_OC_MOUSE_EVENT\\r\\n");
         serial_write("MICHAEL_OC_MOUSE_POSITION=");
         serial_write_hex(ui_mouse_x); serial_write(","); serial_write_hex(ui_mouse_y);
-        serial_write("\r\n");
+        serial_write("\\r\\n");
     }
     if (clicked) ui_mouse_click(ui_mouse_x, ui_mouse_y);
     return clicked;
