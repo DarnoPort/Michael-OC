@@ -92,6 +92,7 @@ static u32 ui_directory_depth;
 static fs_entry_t ui_file_entries[FS_DIRECTORY_LIMIT];
 static u32 ui_file_count;
 static u32 ui_file_selection;
+static int ui_file_selection_visible;
 static u32 ui_file_first_entry;
 static enum ui_file_dialog_mode ui_file_dialog;
 static char ui_file_dialog_buffer[32];
@@ -660,8 +661,13 @@ static void ui_refresh_file_list(void)
         return;
     }
     ui_file_count = count;
-    if (ui_file_count == 0u) ui_file_selection = 0u;
-    else if (ui_file_selection >= ui_file_count) ui_file_selection = ui_file_count - 1u;
+    if (ui_file_count == 0u) {
+        ui_file_selection = 0u;
+        ui_file_selection_visible = 0;
+    } else if (ui_file_selection >= ui_file_count) {
+        ui_file_selection = ui_file_count - 1u;
+        ui_file_selection_visible = 0;
+    }
     ui_keep_file_selection_visible();
 }
 
@@ -670,6 +676,7 @@ static void ui_select_name(const char *name)
     for (u32 i = 0u; i < ui_file_count; ++i) {
         if (ui_text_equal(ui_file_entries[i].name, name)) {
             ui_file_selection = i;
+            ui_file_selection_visible = 1;
             return;
         }
     }
@@ -1038,6 +1045,8 @@ static void draw_mocapp_screen(void)
 static void draw_file_manager(void)
 {
     draw_window_frame("FILE MANAGER");
+    /* The toolbar occupies this strip, so clear the standard title divider. */
+    mono_fill_rect(80u, 112u, 640u, 2u, 0);
     /* Action bar buttons map directly to pointer hit regions. */
     mono_outline_rect(80u, 108u, 76u, 25u, 1); mono_draw_text(88u, 117u, "NEW FILE", 1u, 0);
     mono_outline_rect(160u, 108u, 85u, 25u, 1); mono_draw_text(170u, 117u, "NEW DIR", 1u, 0);
@@ -1063,9 +1072,10 @@ static void draw_file_manager(void)
     const u32 count = remaining < UI_FILE_VISIBLE_ENTRIES ? remaining : UI_FILE_VISIBLE_ENTRIES;
     for (u32 i = 0u; i < count; ++i) {
         const u32 entry_index = ui_file_first_entry + i, y = 174u + i * 22u;
-        const int selected = entry_index == ui_file_selection;
+        const int selected = ui_file_selection_visible && entry_index == ui_file_selection;
         mono_fill_rect(81u, y - 2u, 650u, 18u, selected);
-        mono_outline_rect(81u, y - 2u, 650u, 18u, selected ? 1 : 0);
+        /* Black outline remains visible around the white selected row. */
+        mono_outline_rect(81u, y - 2u, 650u, 18u, 0);
         mono_draw_text(92u, y, ui_file_entries[entry_index].name, 1u, selected);
         mono_draw_text(610u, y, ui_file_entries[entry_index].type == FS_ENTRY_DIRECTORY ? "FOLDER" : "FILE", 1u, selected);
     }
@@ -1617,6 +1627,8 @@ static void ui_finish_file_dialog(void)
             ui_set_message("CREATE FILE FAILED");
             return;
         }
+        ui_refresh_file_list();
+        ui_select_name(name);
         serial_write("MICHAEL_OC_FILE_CREATED\r\n");
         (void)editor_open_file(index, name, UI_SCREEN_FILES);
         return;
@@ -1693,11 +1705,13 @@ static int ui_handle_file_manager_scancode(u8 scancode)
 
     if (scancode == 0x48u) {
         if (ui_file_count != 0u && ui_file_selection > 0u) --ui_file_selection;
+        if (ui_file_count != 0u) ui_file_selection_visible = 1;
         ui_keep_file_selection_visible();
         return 1;
     }
     if (scancode == 0x50u) {
         if (ui_file_count != 0u && ui_file_selection + 1u < ui_file_count) ++ui_file_selection;
+        if (ui_file_count != 0u) ui_file_selection_visible = 1;
         ui_keep_file_selection_visible();
         return 1;
     }
@@ -1705,6 +1719,7 @@ static int ui_handle_file_manager_scancode(u8 scancode)
         if (ui_directory_depth > 0u) {
             --ui_directory_depth;
             ui_file_selection = 0u;
+            ui_file_selection_visible = 0;
             ui_set_message("PARENT DIRECTORY");
         } else ui_set_message("ALREADY AT ROOT");
         return 1;
@@ -1716,6 +1731,7 @@ static int ui_handle_file_manager_scancode(u8 scancode)
     }
     if (scancode == 0x1Cu) {
         if (ui_file_selection >= ui_file_count) return 0;
+        ui_file_selection_visible = 1;
         u16 index = 0u;
         const fs_entry_t *entry = &ui_file_entries[ui_file_selection];
         if (!fs_lookup(ui_current_directory(), entry->name, &index)) {
@@ -1729,6 +1745,7 @@ static int ui_handle_file_manager_scancode(u8 scancode)
             }
             ui_directory_stack[ui_directory_depth++] = index;
             ui_file_selection = 0u;
+            ui_file_selection_visible = 0;
             ui_set_message("DIRECTORY OPENED");
         } else if (mocapp_is_script(entry->name)) {
             (void)mocapp_start_file(index, entry->name, UI_SCREEN_FILES);
@@ -1914,6 +1931,7 @@ static int handle_ui_scancode(u8 scancode)
         if (scancode == 0x05u) {
             ui_directory_depth = 0u;
             ui_file_selection = 0u;
+            ui_file_selection_visible = 0;
             ui_file_first_entry = 0u;
             ui_file_dialog = UI_FILE_DIALOG_NONE;
             ui_set_message("READY");
@@ -2169,6 +2187,7 @@ static void ui_mouse_click(u32 x, u32 y)
                         ui_mouse_last_click_index == selected &&
                         (u32)(now - ui_mouse_last_click_tick) <= 50u;
                     ui_file_selection = selected;
+                    ui_file_selection_visible = 1;
                     if (double_click) {
                         ui_mouse_file_click_valid = 0;
                         (void)handle_ui_scancode(0x1Cu);
