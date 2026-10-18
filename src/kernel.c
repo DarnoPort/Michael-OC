@@ -62,6 +62,13 @@ static fs_entry_t ui_console_entries[FS_DIRECTORY_LIMIT];
 static u32 ui_mouse_x = MONO_WIDTH / 2u;
 static u32 ui_mouse_y = MONO_HEIGHT / 2u;
 static u8 ui_mouse_buttons;
+/* Save-under cursor updates only a tiny framebuffer region during pointer motion. */
+static u8 ui_cursor_background[14][7];
+static u32 ui_cursor_saved_x, ui_cursor_saved_y;
+static int ui_cursor_background_valid;
+static u32 ui_mouse_diagnostic_tick, ui_mouse_last_click_tick;
+static u32 ui_mouse_last_click_index = FS_DIRECTORY_LIMIT;
+static int ui_mouse_file_click_valid;
 
 #define UI_EDITOR_CAPACITY 16384u
 #define UI_EDITOR_LINE_WIDTH 100u
@@ -452,24 +459,25 @@ static void mono_draw_hex_byte(u32 x, u32 y, u8 value, u32 scale)
     mono_draw_char(x + 18u * scale, y, digits[value & 0x0Fu], scale, 0);
 }
 
-static void mono_flush_framebuffer(void)
+static void mono_flush_region(u32 x, u32 y, u32 width, u32 height)
 {
-    if (active_framebuffer == 0 || active_bytes_per_pixel == 0u) {
-        return;
-    }
-
-    for (u32 y = 0; y < canvas_height; ++y) {
-        const u32 row_offset = y * active_framebuffer_pitch;
-        for (u32 x = 0; x < canvas_width; ++x) {
-            /* The one-bit software canvas emits only black or full RGB white. */
-            const u32 value = mono_get_pixel(x, y) != 0 ? active_white_pixel : 0u;
-            const u32 offset = row_offset + x * active_bytes_per_pixel;
-
-            for (u32 byte = 0; byte < active_bytes_per_pixel; ++byte) {
+    if (active_framebuffer == 0 || active_bytes_per_pixel == 0u ||
+        x >= canvas_width || y >= canvas_height) return;
+    if (width > canvas_width - x) width = canvas_width - x;
+    if (height > canvas_height - y) height = canvas_height - y;
+    for (u32 row = y; row < y + height; ++row) {
+        const u32 row_offset = row * active_framebuffer_pitch;
+        for (u32 col = x; col < x + width; ++col) {
+            const u32 value = mono_get_pixel(col, row) != 0 ? active_white_pixel : 0u;
+            const u32 offset = row_offset + col * active_bytes_per_pixel;
+            for (u32 byte = 0; byte < active_bytes_per_pixel; ++byte)
                 active_framebuffer[offset + byte] = (u8)(value >> (8u * byte));
-            }
         }
     }
+}
+static void mono_flush_framebuffer(void)
+{
+    mono_flush_region(0u, 0u, canvas_width, canvas_height);
 }
 
 static void draw_window_frame(const char *title)
@@ -485,17 +493,27 @@ static void draw_window_frame(const char *title)
 static void draw_home_screen(void)
 {
     draw_window_frame("MICHAEL OC");
-    mono_draw_text(80u, 140u, "MONOCHROME SYSTEM READY", 2u, 0);
+    mono_draw_text(80u, 118u, "ONE-BIT DESKTOP", 2u, 0);
+    mono_draw_text(80u, 144u, "SELECT AN APPLICATION", 1u, 0);
+    mono_outline_rect(64u, 166u, 226u, 48u, 1);
     mono_draw_text(80u, 188u, "1 SYSTEM STATUS", 2u, 0);
+    mono_outline_rect(64u, 214u, 226u, 43u, 1);
     mono_draw_text(80u, 226u, "2 KEYBOARD TEST", 2u, 0);
-    mono_draw_text(80u, 264u, "3 DISPLAY TEST", 2u, 0);
+    mono_outline_rect(64u, 257u, 226u, 43u, 1);
+    mono_draw_text(80u, 269u, "3 DISPLAY TEST", 2u, 0);
+    mono_outline_rect(385u, 166u, 250u, 48u, 1);
     mono_draw_text(405u, 188u, "4 FILE MANAGER", 2u, 0);
+    mono_outline_rect(385u, 214u, 250u, 43u, 1);
     mono_draw_text(405u, 226u, "5 TEXT EDITOR", 2u, 0);
-    mono_draw_text(405u, 264u, "6 DEBUG CONSOLE", 2u, 0);
-    mono_fill_rect(80u, 315u, 640u, 2u, 1);
-    mono_draw_text(80u, 345u, "PRESS A NUMBER TO LAUNCH AN APP", 1u, 0);
-    mono_draw_text(80u, 370u, "USE ESC TO RETURN HOME", 1u, 0);
-    mono_draw_text(80u, 485u, fs_is_mounted() ? "STORAGE: PERSISTENT FS READY" : "NO VIRTUAL DISK DETECTED", 1u, 0);
+    mono_outline_rect(385u, 257u, 250u, 43u, 1);
+    mono_draw_text(405u, 269u, "6 DEBUG CONSOLE", 2u, 0);
+    mono_fill_rect(80u, 324u, 640u, 2u, 1);
+    mono_draw_text(80u, 346u, "CLICK AN APPLICATION TO OPEN IT", 1u, 0);
+    mono_draw_text(80u, 370u, "FILES: CLICK TO SELECT, DOUBLE-CLICK TO OPEN", 1u, 0);
+    mono_outline_rect(64u, 458u, 672u, 48u, 1);
+    mono_draw_text(80u, 478u, fs_is_mounted() ? "STORAGE: PERSISTENT FS READY" :
+                   "NO VIRTUAL DISK DETECTED", 1u, 0);
+    mono_draw_text(80u, 493u, "BLACK / WHITE  |  1 BIT PER PIXEL", 1u, 0);
 }
 
 static void draw_system_screen(void)
@@ -1018,61 +1036,60 @@ static void draw_mocapp_screen(void)
 static void draw_file_manager(void)
 {
     draw_window_frame("FILE MANAGER");
+    /* Action bar buttons map directly to pointer hit regions. */
+    mono_outline_rect(80u, 108u, 76u, 25u, 1); mono_draw_text(88u, 117u, "NEW FILE", 1u, 0);
+    mono_outline_rect(160u, 108u, 85u, 25u, 1); mono_draw_text(170u, 117u, "NEW DIR", 1u, 0);
+    mono_outline_rect(250u, 108u, 85u, 25u, 1); mono_draw_text(258u, 117u, "RENAME", 1u, 0);
+    mono_outline_rect(340u, 108u, 68u, 25u, 1); mono_draw_text(353u, 117u, "COPY", 1u, 0);
+    mono_outline_rect(412u, 108u, 68u, 25u, 1); mono_draw_text(425u, 117u, "MOVE", 1u, 0);
+    mono_outline_rect(484u, 108u, 68u, 25u, 1); mono_draw_text(492u, 117u, "DELETE", 1u, 0);
+    mono_outline_rect(556u, 108u, 82u, 25u, 1); mono_draw_text(563u, 117u, "REFRESH", 1u, 0);
+
     ui_refresh_file_list();
-    mono_draw_text(80u, 118u, ui_directory_depth == 0u ? "ROOT" : "SUBDIRECTORY", 1u, 0);
-    mono_draw_text(250u, 118u, "N NEW D DIR R RENAME C COPY M MOVE X DEL", 1u, 0);
-    mono_draw_text(80u, 132u, "ENTER OPEN BACKSPACE PARENT", 1u, 0);
-    mono_draw_text(580u, 132u, "ITEM", 1u, 0);
-    mono_draw_uint(610u, 132u, ui_file_count == 0u ? 0u : ui_file_selection + 1u, 1u);
-    mono_draw_text(634u, 132u, "/", 1u, 0);
-    mono_draw_uint(642u, 132u, ui_file_count, 1u);
-    if (ui_file_count == 0u) mono_draw_text(100u, 165u, "DIRECTORY IS EMPTY", 1u, 0);
+    mono_draw_text(80u, 143u, ui_directory_depth == 0u ? "LOCATION: ROOT" : "LOCATION: SUBDIRECTORY", 1u, 0);
+    mono_draw_text(565u, 143u, "ITEM", 1u, 0);
+    mono_draw_uint(595u, 143u, ui_file_count == 0u ? 0u : ui_file_selection + 1u, 1u);
+    mono_draw_text(619u, 143u, "/", 1u, 0); mono_draw_uint(631u, 143u, ui_file_count, 1u);
 
-    const u32 remaining = ui_file_count > ui_file_first_entry ?
-        ui_file_count - ui_file_first_entry : 0u;
-    const u32 count = remaining < UI_FILE_VISIBLE_ENTRIES ?
-        remaining : UI_FILE_VISIBLE_ENTRIES;
+    mono_outline_rect(78u, 150u, 656u, 287u, 1);
+    mono_fill_rect(80u, 152u, 652u, 18u, 1);
+    mono_draw_text(92u, 157u, "NAME", 1u, 1);
+    mono_draw_text(610u, 157u, "TYPE", 1u, 1);
+    if (ui_file_count == 0u) mono_draw_text(100u, 192u, "THIS FOLDER IS EMPTY", 1u, 0);
+
+    const u32 remaining = ui_file_count > ui_file_first_entry ? ui_file_count - ui_file_first_entry : 0u;
+    const u32 count = remaining < UI_FILE_VISIBLE_ENTRIES ? remaining : UI_FILE_VISIBLE_ENTRIES;
     for (u32 i = 0u; i < count; ++i) {
-        const u32 entry_index = ui_file_first_entry + i;
-        const u32 y = 155u + i * 25u;
+        const u32 entry_index = ui_file_first_entry + i, y = 174u + i * 22u;
         const int selected = entry_index == ui_file_selection;
-        mono_fill_rect(80u, y - 2u, 640u, 18u, selected);
+        mono_fill_rect(81u, y - 2u, 650u, 18u, selected);
+        mono_outline_rect(81u, y - 2u, 650u, 18u, selected ? 1 : 0);
         mono_draw_text(92u, y, ui_file_entries[entry_index].name, 1u, selected);
-        mono_draw_text(610u, y,
-                       ui_file_entries[entry_index].type == FS_ENTRY_DIRECTORY ? "DIR" : "FILE",
-                       1u, selected);
+        mono_draw_text(610u, y, ui_file_entries[entry_index].type == FS_ENTRY_DIRECTORY ? "FOLDER" : "FILE", 1u, selected);
     }
-
     if (ui_file_count > UI_FILE_VISIBLE_ENTRIES) {
-        const u32 track_y = 154u;
-        const u32 track_height = 278u;
+        const u32 track_y = 172u, track_height = 260u;
         u32 thumb_height = (UI_FILE_VISIBLE_ENTRIES * (track_height - 2u)) / ui_file_count;
         if (thumb_height < 18u) thumb_height = 18u;
         if (thumb_height > track_height - 2u) thumb_height = track_height - 2u;
         const u32 max_first = ui_file_count - UI_FILE_VISIBLE_ENTRIES;
         const u32 thumb_range = track_height - thumb_height - 2u;
-        const u32 thumb_y = track_y + 1u +
-            (max_first == 0u ? 0u : ui_file_first_entry * thumb_range / max_first);
-        mono_outline_rect(730u, track_y, 10u, track_height, 1);
-        mono_fill_rect(733u, thumb_y, 4u, thumb_height, 1);
+        const u32 thumb_y = track_y + 1u + (max_first == 0u ? 0u : ui_file_first_entry * thumb_range / max_first);
+        mono_outline_rect(721u, track_y, 9u, track_height, 1);
+        mono_fill_rect(723u, thumb_y, 5u, thumb_height, 1);
     }
-
-    mono_draw_text(80u, 468u, ui_status_message, 1u, 0);
-    mono_draw_text(80u, 492u, "F2 REFRESH  N FILE  D DIR  R RENAME  C COPY  M MOVE", 1u, 0);
+    mono_draw_text(80u, 455u, ui_status_message, 1u, 0);
+    mono_draw_text(80u, 480u, "CLICK SELECT  DOUBLE-CLICK OPEN  BACKSPACE PARENT", 1u, 0);
+    mono_draw_text(80u, 495u, "N FILE  D FOLDER  R RENAME  C COPY  M MOVE  X DELETE", 1u, 0);
 
     if (ui_file_dialog != UI_FILE_DIALOG_NONE) {
         mono_fill_rect(125u, 215u, 550u, 112u, 1);
         mono_outline_rect(125u, 215u, 550u, 112u, 0);
-        if (ui_file_dialog == UI_FILE_DIALOG_NEW_FILE)
-            mono_draw_text(155u, 238u, "NEW FILE NAME", 1u, 1);
-        else if (ui_file_dialog == UI_FILE_DIALOG_NEW_DIRECTORY)
-            mono_draw_text(155u, 238u, "NEW DIRECTORY NAME", 1u, 1);
-        else if (ui_file_dialog == UI_FILE_DIALOG_RENAME)
-            mono_draw_text(155u, 238u, "RENAME TO", 1u, 1);
-        else if (ui_file_dialog == UI_FILE_DIALOG_COPY_FILE)
-            mono_draw_text(155u, 238u, "COPY FILE AS NEW NAME", 1u, 1);
-        else if (ui_file_dialog == UI_FILE_DIALOG_MOVE_TO)
-            mono_draw_text(155u, 238u, "MOVE INTO DIRECTORY (OR PARENT)", 1u, 1);
+        if (ui_file_dialog == UI_FILE_DIALOG_NEW_FILE) mono_draw_text(155u, 238u, "NEW FILE NAME", 1u, 1);
+        else if (ui_file_dialog == UI_FILE_DIALOG_NEW_DIRECTORY) mono_draw_text(155u, 238u, "NEW DIRECTORY NAME", 1u, 1);
+        else if (ui_file_dialog == UI_FILE_DIALOG_RENAME) mono_draw_text(155u, 238u, "RENAME TO", 1u, 1);
+        else if (ui_file_dialog == UI_FILE_DIALOG_COPY_FILE) mono_draw_text(155u, 238u, "COPY FILE AS NEW NAME", 1u, 1);
+        else if (ui_file_dialog == UI_FILE_DIALOG_MOVE_TO) mono_draw_text(155u, 238u, "MOVE INTO DIRECTORY (OR PARENT)", 1u, 1);
         else {
             mono_draw_text(155u, 238u, "DELETE SELECTED ITEM?", 1u, 1);
             mono_draw_text(155u, 265u, "PRESS Y TO DELETE OR N TO CANCEL", 1u, 1);
@@ -1352,25 +1369,51 @@ static int ui_console_handle_scancode(u8 scancode)
     return 0;
 }
 
+static void ui_restore_mouse_cursor_background(void)
+{
+    if (!ui_cursor_background_valid) return;
+    for (u32 row = 0u; row < 14u; ++row) {
+        const u32 y = ui_cursor_saved_y + row;
+        if (y >= canvas_height) continue;
+        for (u32 col = 0u; col < 7u; ++col) {
+            const u32 x = ui_cursor_saved_x + col;
+            if (x < canvas_width) mono_put_pixel(x, y, ui_cursor_background[row][col] != 0u);
+        }
+    }
+    ui_cursor_background_valid = 0;
+}
 static void draw_mouse_cursor(void)
 {
     if (!mouse_is_available()) return;
-
-    /* A black-edged, white-filled pointer stays visible on either background. */
+    ui_cursor_saved_x = ui_mouse_x; ui_cursor_saved_y = ui_mouse_y;
+    for (u32 row = 0u; row < 14u; ++row) {
+        for (u32 col = 0u; col < 7u; ++col) {
+            const u32 x = ui_mouse_x + col, y = ui_mouse_y + row;
+            ui_cursor_background[row][col] =
+                (x < canvas_width && y < canvas_height && mono_get_pixel(x, y) != 0) ? 1u : 0u;
+        }
+    }
     for (u32 row = 0u; row < 14u; ++row) {
         const u32 width = row / 2u + 1u;
         for (u32 col = 0u; col < width; ++col) {
-            const u32 x = ui_mouse_x + col;
-            const u32 y = ui_mouse_y + row;
+            const u32 x = ui_mouse_x + col, y = ui_mouse_y + row;
             mono_put_pixel(x, y, 0);
-            if (row >= 3u && col > 0u && col + 1u < width)
-                mono_put_pixel(x, y, 1);
+            if (row >= 3u && col > 0u && col + 1u < width) mono_put_pixel(x, y, 1);
         }
     }
+    ui_cursor_background_valid = 1;
 }
-
+static void ui_update_mouse_cursor(void)
+{
+    const u32 old_x = ui_cursor_saved_x, old_y = ui_cursor_saved_y;
+    ui_restore_mouse_cursor_background();
+    draw_mouse_cursor();
+    mono_flush_region(old_x, old_y, 7u, 14u);
+    mono_flush_region(ui_mouse_x, ui_mouse_y, 7u, 14u);
+}
 static void render_active_screen(void)
 {
+    ui_cursor_background_valid = 0;
     switch (active_screen) {
     case UI_SCREEN_SYSTEM: draw_system_screen(); break;
     case UI_SCREEN_KEYBOARD: draw_keyboard_screen(); break;
@@ -2098,153 +2141,140 @@ static void log_ui_screen_event(void)
 static void ui_mouse_click(u32 x, u32 y)
 {
     serial_write("MICHAEL_OC_MOUSE_CLICK\r\n");
-
     if (active_screen == UI_SCREEN_HOME) {
-        if (x >= 65u && x <= 280u && y >= 175u && y <= 212u) {
-            (void)handle_ui_scancode(0x02u);
-        } else if (x >= 65u && x <= 280u && y >= 215u && y <= 250u) {
-            (void)handle_ui_scancode(0x03u);
-        } else if (x >= 65u && x <= 280u && y >= 252u && y <= 292u) {
-            (void)handle_ui_scancode(0x04u);
-        } else if (x >= 395u && x <= 610u && y >= 175u && y <= 212u) {
-            (void)handle_ui_scancode(0x05u);
-        } else if (x >= 395u && x <= 610u && y >= 215u && y <= 250u) {
-            (void)handle_ui_scancode(0x06u);
-        } else if (x >= 395u && x <= 610u && y >= 252u && y <= 292u) {
-            (void)handle_ui_scancode(0x07u);
-        }
+        ui_mouse_file_click_valid = 0;
+        if (x >= 65u && x <= 280u && y >= 175u && y <= 212u) (void)handle_ui_scancode(0x02u);
+        else if (x >= 65u && x <= 280u && y >= 215u && y <= 250u) (void)handle_ui_scancode(0x03u);
+        else if (x >= 65u && x <= 280u && y >= 252u && y <= 292u) (void)handle_ui_scancode(0x04u);
+        else if (x >= 395u && x <= 610u && y >= 175u && y <= 212u) (void)handle_ui_scancode(0x05u);
+        else if (x >= 395u && x <= 610u && y >= 215u && y <= 250u) (void)handle_ui_scancode(0x06u);
+        else if (x >= 395u && x <= 610u && y >= 252u && y <= 292u) (void)handle_ui_scancode(0x07u);
         return;
     }
-
     if (active_screen == UI_SCREEN_FILES) {
         if (ui_file_dialog != UI_FILE_DIALOG_NONE) {
-            if (ui_file_dialog == UI_FILE_DIALOG_DELETE_CONFIRM &&
-                y >= 260u && y <= 300u) {
+            if (ui_file_dialog == UI_FILE_DIALOG_DELETE_CONFIRM && y >= 260u && y <= 300u)
                 (void)handle_ui_scancode(x < 400u ? 0x15u : 0x31u);
-            }
-            return; /* File names are still typed with the keyboard. */
+            return;
         }
-        if (y >= 153u && y < 453u && x >= 80u && x <= 720u) {
-            const u32 visible_index = (y - 153u) / 25u;
+        if (y >= 169u && y < 433u && x >= 80u && x <= 720u) {
+            const u32 visible_index = (y - 169u) / 22u;
             if (visible_index < UI_FILE_VISIBLE_ENTRIES) {
                 const u32 selected = ui_file_first_entry + visible_index;
                 if (selected < ui_file_count) {
+                    const u32 now = timer_ticks();
+                    const int double_click = ui_mouse_file_click_valid &&
+                        ui_mouse_last_click_index == selected &&
+                        (u32)(now - ui_mouse_last_click_tick) <= 50u;
                     ui_file_selection = selected;
-                    (void)handle_ui_scancode(0x1Cu); /* Single-click opens an entry. */
+                    if (double_click) {
+                        ui_mouse_file_click_valid = 0;
+                        (void)handle_ui_scancode(0x1Cu);
+                    } else {
+                        ui_mouse_last_click_index = selected;
+                        ui_mouse_last_click_tick = now;
+                        ui_mouse_file_click_valid = 1;
+                    }
                 }
             }
             return;
         }
-        if (y >= 112u && y <= 128u) {
-            if (x >= 250u && x < 282u) (void)handle_ui_scancode(0x31u);      /* N */
-            else if (x >= 282u && x < 310u) (void)handle_ui_scancode(0x20u); /* D */
-            else if (x >= 310u && x < 360u) (void)handle_ui_scancode(0x13u); /* R */
-            else if (x >= 360u && x < 430u) (void)handle_ui_scancode(0x2Du); /* X */
-        } else if (y >= 485u && y <= 510u) {
-            if (x < 210u) (void)handle_ui_scancode(0x3Cu);                  /* F2 */
-            else if (x < 290u) (void)handle_ui_scancode(0x31u);
-            else if (x < 370u) (void)handle_ui_scancode(0x20u);
-            else if (x < 445u) (void)handle_ui_scancode(0x13u);
-        } else if (y >= 520u && y <= 550u && x < 190u) {
-            (void)handle_ui_scancode(0x01u);
-        }
+        ui_mouse_file_click_valid = 0;
+        if (y >= 108u && y <= 134u) {
+            if (x >= 80u && x < 156u) (void)handle_ui_scancode(0x31u);
+            else if (x >= 160u && x < 245u) (void)handle_ui_scancode(0x20u);
+            else if (x >= 250u && x < 335u) (void)handle_ui_scancode(0x13u);
+            else if (x >= 340u && x < 408u) (void)handle_ui_scancode(0x2Eu);
+            else if (x >= 412u && x < 480u) (void)handle_ui_scancode(0x32u);
+            else if (x >= 484u && x < 552u) (void)handle_ui_scancode(0x2Du);
+            else if (x >= 556u && x < 638u) (void)handle_ui_scancode(0x3Cu);
+        } else if (y >= 520u && y <= 550u && x < 190u) (void)handle_ui_scancode(0x01u);
         return;
     }
-
+    ui_mouse_file_click_valid = 0;
     if (active_screen == UI_SCREEN_EDITOR) {
-        if (editor_exit_confirm && y >= 235u && y <= 300u) {
-            (void)handle_ui_scancode(x < 400u ? 0x3Cu : 0x01u);
-        } else if (y >= 138u && y < 466u && x >= 80u && x < 680u) {
+        if (editor_exit_confirm && y >= 235u && y <= 300u) (void)handle_ui_scancode(x < 400u ? 0x3Cu : 0x01u);
+        else if (y >= 138u && y < 466u && x >= 80u && x < 680u) {
             const u32 visual_line = editor_first_line + (y - 142u) / 18u;
             const u32 visual_column = (x - 80u) / 6u;
             u32 line_start = 0u, line_end = 0u;
             if (editor_find_visual_line(visual_line, &line_start, &line_end)) {
                 const u32 line_length = line_end - line_start;
-                editor_cursor = line_start +
-                    (visual_column < line_length ? visual_column : line_length);
+                editor_cursor = line_start + (visual_column < line_length ? visual_column : line_length);
                 editor_exit_confirm = 0;
             }
-        } else if (y >= 485u && y <= 510u && x < 200u) {
-            (void)handle_ui_scancode(0x3Cu); /* F2 */
-        } else if (y >= 520u && y <= 550u && x < 190u) {
-            (void)handle_ui_scancode(0x01u);
-        }
+        } else if (y >= 485u && y <= 510u && x < 200u) (void)handle_ui_scancode(0x3Cu);
+        else if (y >= 520u && y <= 550u && x < 190u) (void)handle_ui_scancode(0x01u);
         return;
     }
-
     if (active_screen == UI_SCREEN_APP) {
         if (y >= 470u && y <= 510u) {
             if (x < 290u) (void)handle_ui_scancode(0x01u);
-            else if (x >= 560u) (void)handle_ui_scancode(0x3Bu); /* F1 */
+            else if (x >= 560u) (void)handle_ui_scancode(0x3Bu);
         }
         return;
     }
-
-    if (y >= 520u && y <= 550u && x >= 75u && x <= 200u)
-        (void)handle_ui_scancode(0x01u);
+    if (y >= 520u && y <= 550u && x >= 75u && x <= 200u) (void)handle_ui_scancode(0x01u);
 }
 
-static void ui_handle_mouse_event(const mouse_event_t *event)
+static int ui_handle_mouse_event(const mouse_event_t *event)
 {
     const int next_x = (int)ui_mouse_x + event->dx;
     const int next_y = (int)ui_mouse_y + event->dy;
-    ui_mouse_x = next_x < 0 ? 0u :
-                 (next_x >= (int)canvas_width ? canvas_width - 1u : (u32)next_x);
-    ui_mouse_y = next_y < 0 ? 0u :
-                 (next_y >= (int)canvas_height ? canvas_height - 1u : (u32)next_y);
-
-    const int clicked = (event->buttons & 0x01u) != 0u &&
-                        (ui_mouse_buttons & 0x01u) == 0u;
+    ui_mouse_x = next_x < 0 ? 0u : (next_x >= (int)canvas_width ? canvas_width - 1u : (u32)next_x);
+    ui_mouse_y = next_y < 0 ? 0u : (next_y >= (int)canvas_height ? canvas_height - 1u : (u32)next_y);
+    const int clicked = (event->buttons & 0x01u) != 0u && (ui_mouse_buttons & 0x01u) == 0u;
     ui_mouse_buttons = event->buttons;
-    serial_write("MICHAEL_OC_MOUSE_EVENT\r\n");
-    serial_write("MICHAEL_OC_MOUSE_POSITION=");
-    serial_write_hex(ui_mouse_x);
-    serial_write(",");
-    serial_write_hex(ui_mouse_y);
-    serial_write("\r\n");
-
+    const u32 now = timer_ticks();
+    /* Rate-limit UART diagnostics; cursor movement itself is never throttled. */
+    if (now != ui_mouse_diagnostic_tick) {
+        ui_mouse_diagnostic_tick = now;
+        serial_write("MICHAEL_OC_MOUSE_EVENT\r\n");
+        serial_write("MICHAEL_OC_MOUSE_POSITION=");
+        serial_write_hex(ui_mouse_x); serial_write(","); serial_write_hex(ui_mouse_y);
+        serial_write("\r\n");
+    }
     if (clicked) ui_mouse_click(ui_mouse_x, ui_mouse_y);
+    return clicked;
 }
-
 static void keyboard_event_loop(void)
 {
     serial_write("MICHAEL_OC_KEYBOARD_EVENT_LOOP_OK\r\n");
-
     for (;;) {
         if (!timer_tick_marker_reported && timer_ticks() != 0u) {
             timer_tick_marker_reported = 1;
             serial_write("MICHAEL_OC_TIMER_TICK_OK\r\n");
         }
-
         mouse_event_t mouse_event;
         if (mouse_try_get_event(&mouse_event)) {
             const enum ui_screen previous_screen = active_screen;
-            ui_handle_mouse_event(&mouse_event);
+            const u32 previous_x = ui_mouse_x, previous_y = ui_mouse_y;
+            const int clicked = ui_handle_mouse_event(&mouse_event);
             if (active_screen != previous_screen) log_ui_screen_event();
-            render_active_screen();
-            mono_flush_framebuffer();
+            if (clicked || active_screen != previous_screen) {
+                render_active_screen();
+                mono_flush_framebuffer();
+            } else if (ui_mouse_x != previous_x || ui_mouse_y != previous_y) {
+                ui_update_mouse_cursor();
+            }
             continue;
         }
-
         u8 scancode;
         if (keyboard_try_read_scancode(&scancode)) {
             const enum ui_screen previous_screen = active_screen;
             if (handle_ui_scancode(scancode)) {
-                if (active_screen != previous_screen) {
-                    log_ui_screen_event();
-                } else if (active_screen == UI_SCREEN_KEYBOARD) {
+                if (active_screen != previous_screen) log_ui_screen_event();
+                else if (active_screen == UI_SCREEN_KEYBOARD) {
                     serial_write("MICHAEL_OC_UI_KEY_SCANCODE=");
-                    serial_write_hex((u32)scancode);
-                    serial_write("\r\n");
+                    serial_write_hex((u32)scancode); serial_write("\r\n");
                 }
                 render_active_screen();
                 mono_flush_framebuffer();
             }
-        } else {
-            __asm__ volatile ("pause");
-        }
+        } else __asm__ volatile ("pause");
     }
 }
+
 
 static void show_vga_fallback(void)
 {
